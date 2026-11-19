@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Tworzy plik .env dla docker compose i przygotowuje katalogi na hoście.
+# Zapisuje konfigurację Dockera w ~/.vk/docker.env (i link .env w katalogu aplikacji)
+# oraz przygotowuje katalogi na hoście.
 # Użycie: ./scripts/docker-setup.sh [KATALOG_Z_REPOZYTORIAMI] [PORT]
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -23,14 +24,16 @@ if ! git config --global user.email >/dev/null; then
   echo "Uwaga: brak git config --global user.email — merge'e w kontenerze się nie udadzą." >&2
 fi
 
-cat > .env <<ENV
+cat > "$HOME/.vk/docker.env" <<ENV
 VK_UID=$(id -u)
 VK_GID=$(id -g)
 VK_HOST_HOME=$HOME
 VK_PROJECTS_DIR=$projects
 VK_PORT=$port
 ENV
-echo "Zapisano .env:"
-cat .env
+# link, żeby w katalogu aplikacji działało też zwykłe `docker compose up`
+ln -sf "$HOME/.vk/docker.env" .env 2>/dev/null || cp "$HOME/.vk/docker.env" .env
+echo "Zapisano ~/.vk/docker.env:"
+cat "$HOME/.vk/docker.env"
 echo
 echo "Dalej: docker compose up -d --build   →  http://localhost:$port"

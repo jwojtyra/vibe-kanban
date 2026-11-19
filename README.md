@@ -17,7 +17,28 @@ Lokalny kanban do planowania i realizacji ticketów z **Claude Code**.
 
 Specyfikacja: [docs/SPEC.md](docs/SPEC.md). Zrzuty ekranu: [docs/screenshots](docs/screenshots).
 
-## Uruchomienie (Linux / WSL2)
+## Instalacja jako plugin Claude Code (zalecane)
+
+W Claude Code:
+
+```
+/plugin marketplace add jwojtyra/vibe-kanban
+/plugin install vibe-kanban@vibe-kanban
+/vibe-kanban:setup ~/projects
+```
+
+- `/plugin install` pobiera aplikację (z `Dockerfile`), a `/vibe-kanban:setup` buduje i uruchamia
+  serwer w Dockerze; katalog to miejsce, w którym trzymasz repozytoria (montowany w kontenerze).
+- Od następnych sesji hook pluginu sam uruchamia kontener w tle, jeśli nie działa.
+- Plugin rejestruje MCP `vibe-kanban` (przez `docker exec`) i skill, który uczy Claude modelu
+  Etap → Funkcja → Krok, oraz komendy `/vibe-kanban:setup` i `/vibe-kanban:ticket`
+  (np. `/vibe-kanban:ticket https://acme.atlassian.net/browse/SHOP-500`).
+- Planowanie i realizacja nadal idą przez polecenia kopiowane z UI — otwierają dedykowane
+  sesje z pełnym kontekstem ticketu.
+- Marketplace pobiera domyślną gałąź repozytorium; dla prywatnego repo potrzebny jest dostęp git
+  (np. `gh auth login` lub klucz SSH).
+
+## Uruchomienie bez pluginu (Linux / WSL2)
 
 Wymagania na hoście: **Docker** (z dostępem do `docker` bez sudo), **git**, **bash**, **curl**
 i **Claude Code** (`claude`, zalogowany). Node.js ani żadne aliasy nie są potrzebne.
@@ -98,8 +119,8 @@ Widoki ticketu: **Plan** (drzewo Etap → Funkcja → Krok ze statusami) i **Tab
 
 ## Repozytoria i tickety: UI, MCP, API
 
-**MCP (np. agent zakłada ticket sam):** `vk mcp` bez `--task` działa w trybie globalnym.
-Zarejestruj go raz w Claude Code:
+**MCP (np. agent zakłada ticket sam):** plugin rejestruje je automatycznie. Bez pluginu
+zarejestruj tryb globalny raz w Claude Code:
 
 ```bash
 claude mcp add vibe-kanban -s user -- docker exec -i vibe-kanban node --no-warnings /app/dist/cli.js mcp

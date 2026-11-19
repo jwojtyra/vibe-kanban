@@ -1,8 +1,9 @@
 # Serwer vibe-kanban w Dockerze.
-# Wartości z pliku .env tworzy: ./scripts/docker-setup.sh
+# Wartości z pliku .env (link do ~/.vk/docker.env) tworzy: ./scripts/docker-setup.sh
 #
 # Wszystkie katalogi są montowane pod TYMI SAMYMI ścieżkami co na hoście, bo git zapisuje
 # absolutne ścieżki worktree, a sesje Claude (na hoście) pracują w tych samych katalogach.
+name: vibe-kanban
 services:
   vibe-kanban:
     build: .

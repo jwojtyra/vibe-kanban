@@ -1,0 +1,11 @@
+{
+  "name": "vibe-kanban",
+  "owner": { "name": "jwojtyra" },
+  "plugins": [
+    {
+      "name": "vibe-kanban",
+      "source": "./",
+      "description": "Lokalny kanban dla Claude Code: tickety, plan Etap → Funkcja → Krok, realizacja w worktree i review."
+    }
+  ]
+}
