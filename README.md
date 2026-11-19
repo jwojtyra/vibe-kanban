@@ -1,0 +1,78 @@
+# vibe-kanban
+
+Lokalny kanban do planowania i realizacji zadań z **Claude Code**.
+
+- Zadanie (np. z linku do Jiry) → sesja Claude rozbija je na **podzadania** z opisem,
+  „jaki problem rozwiązuje”, kryteriami akceptacji, **kolejnością i zależnościami**.
+- Po akceptacji planu subagenci realizują podzadania w osobnych **git worktree**.
+- Wynik trafia do **Review**: diff, komentarze do linii, sesja z agentem, akceptacja → **Done** (lokalny merge).
+- **Wszystko lokalnie.** Nic nie jest pushowane. **Strona nie wysyła niczego do Claude** — pracują
+  wyłącznie sesje uruchamiane z terminala poleceniami kopiowanymi z UI.
+
+Specyfikacja: [docs/SPEC.md](docs/SPEC.md).
+
+## Wymagania
+
+- Node.js ≥ 22.13 (wbudowany `node:sqlite`)
+- git
+- Claude Code (`claude`) w PATH
+
+## Instalacja
+
+```bash
+npm install
+npm run build
+npm link        # udostępnia polecenie `vk`
+vk serve        # UI: http://localhost:4777
+```
+
+Bez `npm link` ustaw w UI → Ustawienia → Uruchamianie pole „Polecenie vk” na
+`node /ścieżka/do/vibe-kanban/dist/cli.js`.
+
+## Przepływ
+
+1. **+ Projekt** — ścieżka do lokalnego repozytorium git (gałąź bazowa = bieżąca).
+2. **+ Zadanie** — „Z ticketu”: wklej link (`…/browse/PROJ-123`), ID staje się kluczem zadania.
+   Uzupełnij opis, **założenia**, **linki** dla agenta, **zasoby referencyjne** (ścieżka lub URL git,
+   tylko do odczytu) i ewentualnie własne **prompty**.
+3. **Planowanie** — skopiuj `vk plan PROJ-123` do terminala. Otwiera się zawsze ta sama sesja
+   Claude (wznawiana), która przez MCP widzi zadanie i tworzy podzadania (status Draft).
+4. **Akceptacja planu** w UI (edycja, kolejność ↑↓, zależności) → Todo.
+5. **Realizacja** — `vk run PROJ-123`. Subagent (`claude -p`) dla każdego podzadania w jego worktree.
+   Kolejne rusza, gdy jego zależności są w Review/Done. Koniec → Review, błąd → Blocked.
+6. **Review** — w UI diff i komentarze (klik w linię). Do pracy nad poprawkami:
+   - `vk open PROJ-123-2` — stała sesja review w worktree podzadania (zna komentarze i zadanie),
+   - `vk open PROJ-123-2 --agent` — wznawia sesję subagenta, który implementował.
+7. **Akceptuj → Done** — merge `--no-ff` do gałęzi `vk/PROJ-123`. Push robisz sam.
+
+## Polecenia CLI
+
+| Polecenie | Opis |
+| --- | --- |
+| `vk serve [-p 4777]` | UI i API (tylko 127.0.0.1) |
+| `vk plan <TASK>` | sesja planowania (stała, wznawiana) |
+| `vk run <TASK> [-c N]` | realizacja podzadań wg kolejności i zależności |
+| `vk exec <SUBTASK>` | subagent dla jednego podzadania |
+| `vk open <SUBTASK> [--agent] [--fresh]` | sesja pracy/review nad podzadaniem |
+| `vk mcp --task <TASK> [--subtask <KEY>]` | serwer MCP (używany przez sesje) |
+
+## Narzędzia MCP dostępne w sesjach
+
+`vk_get_task`, `vk_list_subtasks`, `vk_get_subtask`, `vk_create_subtask`, `vk_update_subtask`,
+`vk_delete_subtask`, `vk_reorder_subtasks`, `vk_next_subtasks`, `vk_list_comments`,
+`vk_resolve_comment`, `vk_submit_for_review`.
+
+## Dane i git
+
+- Baza: `~/.vk/vk.db` (zmienna `VK_HOME` zmienia katalog), logi subagentów: `~/.vk/logs`.
+- Worktree: `~/.vk/worktrees/<projekt>/<KLUCZ>`; zasoby git klonowane do `~/.vk/cache`.
+- Gałęzie: `vk/PROJ-123` (zadanie), `vk/PROJ-123-2` (podzadanie). Podzadanie zależne od
+  niezakończonego startuje z gałęzi zależności; gdy baza pójdzie do przodu, UI proponuje Rebase.
+
+## Rozwój
+
+```bash
+npm run build:server && vk serve   # backend
+npm run dev:ui                     # UI z hot reload na :5173 (proxy /api → :4777)
+npm run typecheck
+```
