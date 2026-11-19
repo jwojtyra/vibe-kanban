@@ -123,6 +123,8 @@ export function createApp() {
     next();
   });
 
+  app.get("/api/health", h(() => ({ ok: true })));
+
   // settings
   app.get("/api/settings", h(() => getSettings()));
   app.put("/api/settings", h((req) => (updateSettings(req.body ?? {}), getSettings())));
@@ -214,11 +216,11 @@ export function createApp() {
   return app;
 }
 
-export function startHttpServer(port: number) {
+export function startHttpServer(port: number, host = "127.0.0.1") {
   const app = createApp();
   return new Promise<void>((resolve) => {
-    app.listen(port, "127.0.0.1", () => {
-      console.log(`vibe-kanban: http://localhost:${port}`);
+    app.listen(port, host, () => {
+      console.log(`vibe-kanban: http://localhost:${port} (nasłuch ${host})`);
       resolve();
     });
   });

@@ -17,13 +17,43 @@ Specyfikacja: [docs/SPEC.md](docs/SPEC.md).
 - git
 - Claude Code (`claude`) w PATH
 
-## Instalacja
+## Uruchomienie (Linux / WSL2)
+
+Serwer (UI + API) działa w Dockerze. Na hoście potrzebne są tylko: **git**, **Claude Code**
+i **Node.js ≥ 22.13** dla polecenia `vk`, które otwiera sesje Claude w Twoim terminalu.
+Sesje Claude celowo nie są w kontenerze: korzystają z Twojego logowania, terminala i plików repo.
 
 ```bash
-npm install
-npm run build
-npm link        # udostępnia polecenie `vk`
-vk serve        # UI: http://localhost:4777
+git clone https://github.com/jwojtyra/vibe-kanban && cd vibe-kanban
+
+# 1. Serwer w Dockerze
+./scripts/docker-setup.sh ~/projects     # katalog, w którym trzymasz repozytoria
+docker compose up -d --build             # UI: http://localhost:4777
+
+# 2. CLI `vk` na hoście (do sesji Claude)
+npm install && npm run build && npm link
+```
+
+Ważne:
+- **Repozytoria dodawane w UI muszą leżeć w katalogu podanym w `docker-setup.sh`.** Tylko on
+  jest zamontowany w kontenerze. Montowanie jest pod tą samą ścieżką co na hoście, bo git
+  zapisuje absolutne ścieżki worktree.
+- Kontener działa z Twoim UID/GID i Twoim `~/.gitconfig`, więc commity i merge'e mają Twoją
+  tożsamość, a pliki nie należą do roota.
+- `~/.vk` (baza, worktree, logi) jest wspólny dla kontenera i `vk` na hoście.
+- Port jest wystawiony tylko na `127.0.0.1`.
+- **WSL2:** trzymaj repozytoria w systemie plików WSL (np. `~/projects`), nie na `/mnt/c/...`.
+  Docker może być Docker Desktop z integracją WSL albo Docker Engine zainstalowany w WSL.
+  Polecenia `vk` uruchamiaj w terminalu WSL.
+
+Aktualizacja: `git pull && docker compose up -d --build && npm run build`.
+Logi serwera: `docker compose logs -f`. Zatrzymanie: `docker compose down` (dane zostają w `~/.vk`).
+
+### Bez Dockera
+
+```bash
+npm install && npm run build && npm link
+vk serve        # http://localhost:4777
 ```
 
 Bez `npm link` ustaw w UI → Ustawienia → Uruchamianie pole „Polecenie vk” na

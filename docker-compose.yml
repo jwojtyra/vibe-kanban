@@ -1,0 +1,27 @@
+# Serwer vibe-kanban w Dockerze.
+# Wartości z pliku .env tworzy: ./scripts/docker-setup.sh
+#
+# Wszystkie katalogi są montowane pod TYMI SAMYMI ścieżkami co na hoście, bo git zapisuje
+# absolutne ścieżki worktree, a sesje Claude (na hoście) pracują w tych samych katalogach.
+services:
+  vibe-kanban:
+    build: .
+    image: vibe-kanban:local
+    container_name: vibe-kanban
+    restart: unless-stopped
+    user: "${VK_UID}:${VK_GID}"
+    ports:
+      - "127.0.0.1:${VK_PORT:-4777}:4777" # tylko lokalnie
+    environment:
+      HOME: ${VK_HOST_HOME}
+      VK_HOME: ${VK_HOST_HOME}/.vk
+      CLAUDE_CONFIG_DIR: ${VK_HOST_HOME}/.claude
+    volumes:
+      # dane narzędzia: baza, worktree, logi (współdzielone z CLI `vk` na hoście)
+      - ${VK_HOST_HOME}/.vk:${VK_HOST_HOME}/.vk
+      # repozytoria projektów (dodawane w UI muszą leżeć w tym katalogu)
+      - ${VK_PROJECTS_DIR}:${VK_PROJECTS_DIR}
+      # tożsamość git do commitów/merge'y robionych przez serwer
+      - ${VK_HOST_HOME}/.gitconfig:${VK_HOST_HOME}/.gitconfig:ro
+      # tylko odczyt: informacja, czy sesje Claude już istnieją
+      - ${VK_HOST_HOME}/.claude:${VK_HOST_HOME}/.claude:ro

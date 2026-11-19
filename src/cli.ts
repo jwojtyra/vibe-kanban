@@ -16,7 +16,8 @@ program
   .command("serve")
   .description("Uruchamia lokalne UI i API (http://localhost:PORT)")
   .option("-p, --port <port>", "port", process.env.VK_PORT ?? "4777")
-  .action((o) => startHttpServer(Number(o.port)).catch(fatal));
+  .option("--host <host>", "adres nasłuchu (w Dockerze 0.0.0.0)", process.env.VK_BIND ?? "127.0.0.1")
+  .action((o) => startHttpServer(Number(o.port), o.host).catch(fatal));
 
 program
   .command("plan <taskKey>")
