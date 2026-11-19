@@ -17,53 +17,52 @@ Lokalny kanban do planowania i realizacji ticketów z **Claude Code**.
 
 Specyfikacja: [docs/SPEC.md](docs/SPEC.md). Zrzuty ekranu: [docs/screenshots](docs/screenshots).
 
-## Wymagania
-
-- Node.js ≥ 22.13 (wbudowany `node:sqlite`)
-- git
-- Claude Code (`claude`) w PATH
-
 ## Uruchomienie (Linux / WSL2)
 
-Serwer (UI + API) działa w Dockerze. Na hoście potrzebne są tylko: **git**, **Claude Code**
-i **Node.js ≥ 22.13** dla polecenia `vk`, które otwiera sesje Claude w Twoim terminalu.
-Sesje Claude celowo nie są w kontenerze: korzystają z Twojego logowania, terminala i plików repo.
+Wymagania na hoście: **Docker** (z dostępem do `docker` bez sudo), **git**, **bash**, **curl**
+i **Claude Code** (`claude`, zalogowany). Node.js ani żadne aliasy nie są potrzebne.
 
 ```bash
 git clone https://github.com/jwojtyra/vibe-kanban && cd vibe-kanban
-
-# 1. Serwer w Dockerze
 ./scripts/docker-setup.sh ~/projects     # katalog, w którym trzymasz repozytoria
 docker compose up -d --build             # UI: http://localhost:4777
-
-# 2. CLI `vk` na hoście (do sesji Claude)
-npm install && npm run build && npm link
 ```
+
+Polecenia z UI wklejasz wprost do terminala, np.:
+
+```bash
+bash <(curl -fsS 'http://localhost:4777/x/plan/SHOP-412')
+```
+
+Serwer zwraca krótki skrypt, który uruchamia `claude` na hoście z gotowymi argumentami (prompt,
+kontekst, repozytoria, uprawnienia). Sesja łączy się z MCP vibe-kanban przez
+`docker exec -i vibe-kanban …`, więc wszystko poza samym Claude działa w kontenerze. Sesje Claude
+celowo nie są w kontenerze: korzystają z Twojego logowania, terminala i plików repo.
+Polecenia `bash <(…)` działają w bash i zsh.
 
 Ważne:
 - **Repozytoria dodawane do listy muszą leżeć w katalogu podanym w `docker-setup.sh`.** Tylko on
-  jest zamontowany w kontenerze. Montowanie jest pod tą samą ścieżką co na hoście, bo git
-  zapisuje absolutne ścieżki worktree.
+  jest zamontowany w kontenerze, pod tą samą ścieżką co na hoście (git zapisuje absolutne ścieżki worktree).
 - Kontener działa z Twoim UID/GID i Twoim `~/.gitconfig`, więc commity i merge'e mają Twoją
   tożsamość, a pliki nie należą do roota.
-- `~/.vk` (baza, worktree, logi) jest wspólny dla kontenera i `vk` na hoście.
+- `~/.vk` (baza, worktree, logi) jest wspólny dla kontenera i sesji Claude na hoście.
 - Port jest wystawiony tylko na `127.0.0.1`.
 - **WSL2:** trzymaj repozytoria w systemie plików WSL (np. `~/projects`), nie na `/mnt/c/...`.
-  Docker może być Docker Desktop z integracją WSL albo Docker Engine zainstalowany w WSL.
-  Polecenia `vk` uruchamiaj w terminalu WSL.
+  Docker może być Docker Desktop z integracją WSL albo Docker Engine w WSL. Polecenia z UI
+  wklejaj w terminalu WSL.
 
-Aktualizacja: `git pull && docker compose up -d --build && npm run build`.
+Aktualizacja: `git pull && docker compose up -d --build`.
 Logi serwera: `docker compose logs -f`. Zatrzymanie: `docker compose down` (dane zostają w `~/.vk`).
 
-### Bez Dockera
+### Bez Dockera (opcjonalnie)
 
 ```bash
-npm install && npm run build && npm link
-vk serve        # http://localhost:4777
+npm install && npm run build && npm link   # Node.js ≥ 22.13
+vk serve                                   # http://localhost:4777
 ```
 
-Bez `npm link` ustaw w UI → Ustawienia → Uruchamianie pole „Polecenie vk” na
-`node /ścieżka/do/vibe-kanban/dist/cli.js`.
+Polecenia `bash <(curl …)` działają także wtedy. Jeśli wolisz krótsze `vk plan SHOP-412`, wpisz `vk`
+w Ustawienia → Uruchamianie → „Polecenie CLI”.
 
 ## Przepływ
 
@@ -71,16 +70,17 @@ Bez `npm link` ustaw w UI → Ustawienia → Uruchamianie pole „Polecenie vk�
    komenda testów (trafia do kontekstu agenta).
 2. **+ Ticket** — link do ticketu (ID staje się kluczem), opis, repozytoria. Uzupełnij
    **założenia**, **linki** dla agenta, **zasoby referencyjne** (tylko do odczytu) i ewentualnie **prompty**.
-3. **Planowanie** — skopiuj `vk plan SHOP-412` do terminala. Zawsze ta sama sesja Claude (wznawiana),
+3. **Planowanie** — skopiuj polecenie planowania (`bash <(curl … /x/plan/SHOP-412)`) do terminala. Zawsze ta sama sesja Claude (wznawiana),
    która przez MCP widzi ticket i zapisuje plan: Etapy → Funkcje → Kroki (status Draft).
 4. **Akceptacja planu** w UI — cały plan albo pojedyncze elementy; wcześniej możesz edytować
    pola, kolejność (↑↓) i zależności.
-5. **Realizacja** — `vk run SHOP-412`. Subagent (`claude -p`) dla każdego Kroku w jego worktree,
+5. **Realizacja** — polecenie realizacji (`… /x/run/SHOP-412`). Subagent (`claude -p`) dla każdego Kroku w jego worktree,
    w kolejności planu; Krok rusza, gdy jego zależności (także odziedziczone po Funkcji i Etapie)
    są w Review/Done. Koniec → Review, błąd → Blocked.
 6. **Review Kroku** — diff i komentarze (klik w linię). Do poprawek:
-   - `vk open SHOP-412-1.2.3` — stała sesja review w worktree Kroku (zna komentarze, Funkcję i ticket),
-   - `vk open SHOP-412-1.2.3 --agent` — wznawia sesję subagenta, który wykonał Krok.
+   - „Sesja pracy nad Krokiem” (`… /x/open/SHOP-412-1.2.3`) — stała sesja review w worktree Kroku
+     (zna komentarze, Funkcję i ticket),
+   - „Wznów sesję subagenta” (`… /x/open/SHOP-412-1.2.3?agent=1`) — kontekst agenta, który wykonał Krok.
 7. **Akceptuj → Done** — merge `--no-ff` do gałęzi `vk/SHOP-412` w repo Kroku. Funkcja i Etap są
    „done”, gdy wszystkie ich Kroki są done. Push robisz sam w każdym repo.
 
@@ -102,7 +102,7 @@ Widoki ticketu: **Plan** (drzewo Etap → Funkcja → Krok ze statusami) i **Tab
 Zarejestruj go raz w Claude Code:
 
 ```bash
-claude mcp add vibe-kanban -s user -- vk mcp
+claude mcp add vibe-kanban -s user -- docker exec -i vibe-kanban node --no-warnings /app/dist/cli.js mcp
 ```
 
 Potem np.: „dodaj do vibe-kanban repo ~/projects/shop-backend (backend, testy: go test ./...)
@@ -118,7 +118,18 @@ curl -X POST localhost:4777/api/tasks -H 'Content-Type: application/json' \
   -d '{ "ticket_url": "https://acme.atlassian.net/browse/SHOP-500", "title": "Filtr", "repos": ["backend", "frontend"] }'
 ```
 
-## Polecenia CLI
+## Polecenia
+
+Skrypty serwera (do wklejenia jako `bash <(curl -fsS 'http://localhost:4777/x/…')`):
+
+| Ścieżka | Opis |
+| --- | --- |
+| `/x/plan/<TICKET>` | sesja planowania (stała, wznawiana) |
+| `/x/run/<TICKET>` | realizacja Kroków wg kolejności i zależności |
+| `/x/exec/<KROK>[?force=1]` | subagent dla jednego Kroku |
+| `/x/open/<KROK>[?agent=1\|?fresh=1]` | sesja pracy/review nad Krokiem |
+
+CLI `vk` (opcjonalne, bez Dockera lub z `npm link`):
 
 | Polecenie | Opis |
 | --- | --- |

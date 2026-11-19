@@ -220,7 +220,7 @@ export function rebaseStep(stepId: number): Item {
   const r = spawnSync("git", ["rebase", newBase], { cwd: dir, encoding: "utf8" });
   if (r.status !== 0) {
     spawnSync("git", ["rebase", "--abort"], { cwd: dir });
-    throw new VkError(`Konflikt podczas rebase na ${newBase}. Rozwiąż go w sesji (vk open ${sub.key}).\n${r.stdout}${r.stderr}`);
+    throw new VkError(`Konflikt podczas rebase na ${newBase}. Rozwiąż go w sesji pracy nad Krokiem ${sub.key}.\n${r.stdout}${r.stderr}`);
   }
   return sub;
 }

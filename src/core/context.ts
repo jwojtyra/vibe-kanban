@@ -27,12 +27,25 @@ export interface ResolvedResource {
   note: string;
 }
 
-/** Zasoby zadania z rozwiązanymi ścieżkami lokalnymi. clone=true klonuje brakujące repozytoria git. */
-export function resolveResources(task: Task, clone: boolean): ResolvedResource[] {
+export function gitCacheDir(url: string) {
+  return path.join(subdir("cache"), slug(url.replace(/^(https?:\/\/|git@|ssh:\/\/)/, "")));
+}
+
+/**
+ * Zasoby zadania z rozwiązanymi ścieżkami lokalnymi.
+ *  - true: klonuje brakujące repozytoria git (CLI na hoście),
+ *  - "defer": zwraca docelowe ścieżki bez sprawdzania — klonowanie wykona skrypt na hoście,
+ *  - false: tylko to, co już istnieje (widok w MCP/UI).
+ */
+export function resolveResources(task: Task, clone: boolean | "defer"): ResolvedResource[] {
   return effectiveResources(task).map((r) => {
     let local: string | null = null;
+    if (clone === "defer") {
+      local = r.kind === "git" ? gitCacheDir(r.location) : path.resolve(r.location.replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
+      return { name: r.name, scope: r.scope, kind: r.kind, location: r.location, local_path: local, note: r.note };
+    }
     if (r.kind === "git") {
-      const cached = path.join(subdir("cache"), slug(r.location.replace(/^(https?:\/\/|git@|ssh:\/\/)/, "")));
+      const cached = gitCacheDir(r.location);
       if (clone) {
         try {
           local = ensureGitResource(r.location);
@@ -267,12 +280,21 @@ export function sessionSystemPrompt(kind: PromptKind, task: Task, res: ResolvedR
 
 // ---------- uruchamianie claude ----------
 
+/**
+ * Konfiguracja MCP dla sesji. Gdy serwer działa w Dockerze (VK_CONTAINER), sesja na hoście
+ * uruchamia MCP w kontenerze przez `docker exec -i` — na hoście nie trzeba Node ani `vk`.
+ */
 export function mcpConfig(cli: string, taskKey: string, itemKey?: string): string {
-  const args = ["--no-warnings", cli, "mcp", "--task", taskKey];
-  if (itemKey) args.push("--item", itemKey);
+  const vkArgs = ["mcp", "--task", taskKey, ...(itemKey ? ["--item", itemKey] : [])];
+  const container = process.env.VK_CONTAINER;
+  if (container) {
+    return JSON.stringify({
+      mcpServers: { "vibe-kanban": { command: "docker", args: ["exec", "-i", container, "node", "--no-warnings", cli, ...vkArgs] } },
+    });
+  }
   const env: Record<string, string> = {};
   if (process.env.VK_HOME) env.VK_HOME = process.env.VK_HOME;
-  return JSON.stringify({ mcpServers: { "vibe-kanban": { command: process.execPath, args, env } } });
+  return JSON.stringify({ mcpServers: { "vibe-kanban": { command: process.execPath, args: ["--no-warnings", cli, ...vkArgs], env } } });
 }
 
 /** Ustawienia z regułami deny dla ścieżek tylko do odczytu. */

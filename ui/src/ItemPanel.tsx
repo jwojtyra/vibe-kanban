@@ -190,7 +190,7 @@ export function ItemPanel({
             </button>
           )}
           {isStep && it.status === "review" && (
-            <button className="btn btn-small btn-ghost" disabled={busy} onClick={() => setStatus("todo")} title="Ponowne uruchomienie subagenta przez vk run / vk exec">
+            <button className="btn btn-small btn-ghost" disabled={busy} onClick={() => setStatus("todo")} title="Ponowne uruchomienie subagenta (polecenie realizacji)">
               Do ponownej realizacji
             </button>
           )}

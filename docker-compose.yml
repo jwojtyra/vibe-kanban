@@ -13,6 +13,10 @@ services:
     ports:
       - "127.0.0.1:${VK_PORT:-4777}:4777" # tylko lokalnie
     environment:
+      # nazwa kontenera: sesje Claude na hoście uruchamiają MCP przez `docker exec -i vibe-kanban ...`
+      VK_CONTAINER: vibe-kanban
+      # adres, pod którym host widzi serwer (używany w poleceniach `bash <(curl ...)` z UI)
+      VK_PUBLIC_URL: http://localhost:${VK_PORT:-4777}
       HOME: ${VK_HOST_HOME}
       VK_HOME: ${VK_HOST_HOME}/.vk
       CLAUDE_CONFIG_DIR: ${VK_HOST_HOME}/.claude

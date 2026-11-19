@@ -4,6 +4,7 @@ import { z } from "zod";
 import { commentView, itemContext, itemSummary, taskContext } from "../core/context.js";
 import { commitAll } from "../core/git.js";
 import { addRepo } from "../core/repos.js";
+import { copyCommand } from "../http/scripts.js";
 import {
   attachRepo,
   createItem,
@@ -120,8 +121,7 @@ function registerGlobalTools(server: McpServer) {
     },
     wrap((a: { title: string; ticket_url?: string; description?: string; assumptions?: string; links?: { url: string; note?: string }[]; repos?: string[] }) => {
       const t = createTask(a);
-      const cli = getSettings().cli_command || "vk";
-      return { key: t.key, title: t.title, ticket_id: t.ticket_id || undefined, repos: listTaskRepos(t.id).map((r) => r.name), plan_command: `${cli} plan ${t.key}` };
+      return { key: t.key, title: t.title, ticket_id: t.ticket_id || undefined, repos: listTaskRepos(t.id).map((r) => r.name), plan_command: copyCommand("plan", t.key) };
     }),
   );
 }

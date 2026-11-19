@@ -76,8 +76,11 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   review_prompt: DEFAULT_REVIEW_PROMPT,
   /** Założenia globalne — trafiają do każdej sesji. */
   assumptions: "",
-  /** Polecenie wstawiane do copy-paste (np. "vk" albo "node /sciezka/dist/cli.js"). */
-  cli_command: "vk",
+  /**
+   * Polecenie CLI do copy-paste (np. "vk" po npm link). Puste = polecenia `bash <(curl …)`
+   * generowane przez serwer — nic nie trzeba instalować poza Claude Code, docker i curl.
+   */
+  cli_command: "",
   /** Polecenie uruchamiające Claude Code. */
   claude_command: "claude",
   /** Tryb uprawnień subagenta (vk run / vk exec): default | acceptEdits | bypassPermissions. */

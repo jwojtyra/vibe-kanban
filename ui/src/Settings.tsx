@@ -60,13 +60,16 @@ export function SettingsModal({ onClose, onError, onSaved }: { onClose: () => vo
       )}
       {tab === "run" && (
         <div className="stack">
-          <Field label="Polecenie vk w copy-paste" hint='Np. "vk" (po npm link) albo "node /ścieżka/vibe-kanban/dist/cli.js".'>
+          <Field
+            label="Polecenie CLI w copy-paste (opcjonalne)"
+            hint='Puste (zalecane) = polecenia "bash <(curl …)" generowane przez serwer — nic nie trzeba instalować. Wpisz np. "vk", jeśli używasz CLI po npm link.'
+          >
             <input className="mono" value={s.cli_command} onChange={set("cli_command")} />
           </Field>
           <Field label="Polecenie Claude Code">
             <input className="mono" value={s.claude_command} onChange={set("claude_command")} />
           </Field>
-          <Field label="Tryb uprawnień subagenta (vk run / vk exec)">
+          <Field label="Tryb uprawnień subagenta (realizacja Kroków)">
             <select value={s.exec_permission_mode} onChange={set("exec_permission_mode")}>
               <option value="default">default</option>
               <option value="acceptEdits">acceptEdits</option>

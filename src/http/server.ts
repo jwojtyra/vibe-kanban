@@ -5,7 +5,8 @@ import { commentView, itemContext } from "../core/context.js";
 import { mergeStep, rebaseStep, removeStepWorktree, stepDiff, taskBranch, taskRepos, taskWorktreePath } from "../core/git.js";
 import { uiDistPath } from "../core/paths.js";
 import { addRepo } from "../core/repos.js";
-import { sessionExists } from "../core/sessions.js";
+import { finishStep, nextStep, openSpec, planSpec, runSummary, sessionExists, startStep } from "../core/sessions.js";
+import { copyCommand, errorFragment, errorScript, execScript, interactiveScript, runScript, setPublicBase, stepFragment } from "./scripts.js";
 import {
   acceptPlan,
   attachRepo,
@@ -22,7 +23,9 @@ import {
   detachRepo,
   extractTicketId,
   getItem,
+  getItemByKey,
   getSettings,
+  getTaskByKey,
   getTask,
   ITEM_STATUSES,
   LEVEL,
@@ -56,7 +59,6 @@ const h = (fn: H) => async (req: Request, res: Response, next: NextFunction) => 
 const id = (req: Request, name = "id") => Number(req.params[name]);
 
 function itemView(items: Item[], it: Item) {
-  const cli = getSettings().cli_command || "vk";
   const isStep = it.level === LEVEL.STEP;
   return {
     ...it,
@@ -64,9 +66,9 @@ function itemView(items: Item[], it: Item) {
     open_comments: isStep ? listComments(it.id, false).length : 0,
     commands: isStep
       ? {
-          open: `${cli} open ${it.key}`,
-          agent: it.agent_session_id ? `${cli} open ${it.key} --agent` : null,
-          exec: `${cli} exec ${it.key}`,
+          open: copyCommand("open", it.key),
+          agent: it.agent_session_id ? copyCommand("agent", it.key) : null,
+          exec: copyCommand("exec", it.key),
         }
       : null,
   };
@@ -75,13 +77,12 @@ function itemView(items: Item[], it: Item) {
 function taskView(tid: number) {
   const task = getTask(tid);
   const items = listItems(tid);
-  const cli = getSettings().cli_command || "vk";
   return {
     task,
     repos: listTaskRepos(tid),
     items: items.map((i) => itemView(items, i)),
     resources: listResources("task", tid),
-    commands: { plan: `${cli} plan ${task.key}`, run: `${cli} run ${task.key}`, plan_session_started: sessionExists(task.plan_session_id) },
+    commands: { plan: copyCommand("plan", task.key), run: copyCommand("run", task.key), plan_session_started: sessionExists(task.plan_session_id) },
     task_branch: taskBranch(task),
     task_repos: taskRepos(task).map((r) => ({ name: r.name, worktree: taskWorktreePath(task, r) })),
   };
@@ -224,6 +225,41 @@ export function createApp() {
 
   app.use("/api", (_req, res) => res.status(404).json({ error: "Nie znaleziono" }));
 
+  // skrypty do wklejenia w terminalu: bash <(curl -fsS http://localhost:4777/x/...)
+  const sh = (fn: (req: Request) => string, onError: (e: unknown) => string) => (req: Request, res: Response) => {
+    res.type("text/plain; charset=utf-8");
+    try {
+      res.send(fn(req));
+    } catch (e) {
+      res.send(onError(e));
+    }
+  };
+  const p = (req: Request, name: string) => String(req.params[name]);
+  app.get("/x/plan/:key", sh((req) => interactiveScript(planSpec(p(req, "key"))), errorScript));
+  app.get("/x/open/:key", sh((req) => interactiveScript(openSpec(p(req, "key"), { agent: req.query.agent === "1", fresh: req.query.fresh === "1" })), errorScript));
+  app.get("/x/run/:key", sh((req) => (getTaskByKey(p(req, "key")), runScript(p(req, "key"))), errorScript));
+  app.get("/x/exec/:key", sh((req) => (getItemByKey(p(req, "key")), execScript(p(req, "key"), req.query.force === "1")), errorScript));
+  app.post("/x/next/:key", sh((req) => stepFragment(nextStep(p(req, "key"))), errorFragment));
+  app.post("/x/start/:key", sh((req) => stepFragment(startStep(p(req, "key"), { force: req.query.force === "1" })), errorFragment));
+  app.post(
+    "/x/finish/:key",
+    sh(
+      (req) => {
+        const step = getItemByKey(p(req, "key"));
+        // stderr subagenta dopisujemy do logu, żeby był widoczny w UI
+        const errFile = step.log_path ? `${step.log_path}.stderr` : "";
+        if (errFile && fs.existsSync(errFile)) {
+          const text = fs.readFileSync(errFile, "utf8").trim();
+          if (text) fs.appendFileSync(step.log_path!, JSON.stringify({ type: "stderr", text }) + "\n");
+          fs.rmSync(errFile, { force: true });
+        }
+        return finishStep(step.key, Number(req.query.code ?? 1)).message + "\n";
+      },
+      (e) => `błąd: ${(e as Error).message}\n`,
+    ),
+  );
+  app.get("/x/summary/:key", sh((req) => runSummary(p(req, "key")).map((l) => `[vk] ${l}`).join("\n") + "\n", (e) => `vk: ${(e as Error).message}\n`));
+
   // UI
   const ui = uiDistPath();
   if (fs.existsSync(ui)) {
@@ -242,6 +278,7 @@ export function createApp() {
 }
 
 export function startHttpServer(port: number, host = "127.0.0.1") {
+  setPublicBase(port);
   const app = createApp();
   return new Promise<void>((resolve) => {
     app.listen(port, host, () => {
