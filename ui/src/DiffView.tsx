@@ -131,6 +131,11 @@ export function DiffView({
           </div>
           {!collapsed[f.path] && (
             <table className="diff-table">
+              <colgroup>
+                <col className="col-ln" />
+                <col className="col-ln" />
+                <col />
+              </colgroup>
               <tbody>
                 {f.lines.map((l, i) => {
                   if (l.type === "hunk" || l.type === "meta")

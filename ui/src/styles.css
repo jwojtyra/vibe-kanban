@@ -699,6 +699,9 @@ textarea:disabled {
   border-collapse: collapse;
   table-layout: fixed;
 }
+.diff-table col.col-ln {
+  width: 52px;
+}
 .diff-table td {
   padding: 0 8px;
   vertical-align: top;
@@ -743,7 +746,7 @@ textarea:disabled {
   outline-offset: -1px;
 }
 .dl-comment td {
-  padding: 6px 10px 6px 112px;
+  padding: 6px 10px 6px 120px;
   background: var(--surface);
 }
 @media (max-width: 700px) {
