@@ -3,15 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { slug, subdir } from "./paths.js";
 import {
-  getProject,
+  effectiveDeps,
+  getItem,
   getRepo,
-  getSubtask,
   getTask,
-  listRepos,
-  listSubtasks,
-  setSubtaskFields,
+  listItems,
+  listSteps,
+  listTaskRepos,
+  setItemFields,
+  type Item,
   type Repo,
-  type Subtask,
   type Task,
   VkError,
 } from "./repo.js";
@@ -44,13 +45,12 @@ export function taskBranch(task: Task) {
   return `vk/${task.key}`;
 }
 
-export function subtaskBranch(sub: Subtask) {
-  return `vk/${sub.key}`;
+export function stepBranch(step: Item) {
+  return `vk/${step.key}`;
 }
 
 function worktreeRoot(repo: Repo) {
-  const project = getProject(repo.project_id);
-  return subdir("worktrees", `${slug(project.name)}-${project.id}`, slug(repo.name));
+  return subdir("worktrees", `${slug(repo.name)}-${repo.id}`);
 }
 
 /** Ścieżka worktree, w którym gałąź jest już wyewidencjonowana (albo null). */
@@ -78,10 +78,10 @@ function ensureWorktree(repo: Repo, dir: string, branch: string, startPoint: str
   return dir;
 }
 
-/** Repozytorium podzadania (z bazy). */
-export function subtaskRepo(sub: Subtask): Repo {
-  if (sub.repo_id == null) throw new VkError(`Podzadanie ${sub.key} nie ma przypisanego repozytorium`);
-  return getRepo(sub.repo_id);
+/** Repozytorium Kroku. */
+export function stepRepo(step: Item): Repo {
+  if (step.repo_id == null) throw new VkError(`${step.key} nie ma przypisanego repozytorium`);
+  return getRepo(step.repo_id);
 }
 
 export function taskWorktreePath(task: Task, repo: Repo): string {
@@ -97,37 +97,40 @@ export function ensureTaskWorktree(task: Task, repo: Repo): string {
   return ensureWorktree(repo, taskWorktreePath(task, repo), taskBranch(task), repo.base_branch);
 }
 
-/** Repozytoria, których dotyczą podzadania zadania (gałąź zadania jest tworzona tylko w nich). */
+/** Repozytoria ticketu, w których są Kroki (gałąź zadania powstaje tylko w nich). */
 export function taskRepos(task: Task): Repo[] {
-  const used = new Set(listSubtasks(task.id).map((s) => s.repo_id));
-  return listRepos(task.project_id).filter((r) => used.has(r.id));
+  const used = new Set(listSteps(task.id).map((s) => s.repo_id));
+  return listTaskRepos(task.id).filter((r) => used.has(r.id));
 }
 
 /**
- * Baza podzadania: gałąź zadania w jego repo, a jeśli któraś zależność z TEGO SAMEGO repo
- * nie jest jeszcze done — gałąź ostatniej takiej zależności (stacked). Zależności z innych
- * repozytoriów wpływają tylko na kolejność, nie na bazę.
+ * Baza Kroku: gałąź zadania w jego repo, a jeśli któraś efektywna zależność z TEGO SAMEGO repo
+ * nie jest jeszcze done — gałąź ostatniej (w kolejności planu) takiej zależności (stacked),
+ * np. Krok implementacji startuje z gałęzi Kroku z czerwonymi testami.
+ * Zależności z innych repozytoriów wpływają tylko na kolejność.
  */
-export function computeBaseRef(sub: Subtask): string {
-  const task = getTask(sub.task_id);
-  const pending = listSubtasks(task.id).filter(
-    (s) => sub.depends_on.includes(s.key) && s.repo_id === sub.repo_id && s.status !== "done" && s.branch,
+export function computeBaseRef(step: Item): string {
+  const task = getTask(step.task_id);
+  const items = listItems(task.id);
+  const order = new Map(items.map((i, idx) => [i.id, idx]));
+  const pending = effectiveDeps(items, items.find((i) => i.id === step.id) ?? step).filter(
+    (s) => s.repo_id === step.repo_id && s.status !== "done" && s.branch,
   );
   if (pending.length === 0) return taskBranch(task);
-  pending.sort((a, b) => b.position - a.position);
+  pending.sort((a, b) => (order.get(b.id) ?? 0) - (order.get(a.id) ?? 0));
   return pending[0].branch!;
 }
 
-/** Tworzy gałąź i worktree podzadania (jeśli jeszcze nie istnieją). */
-export function prepareSubtaskWorktree(subId: number): Subtask {
-  let sub = getSubtask(subId);
+/** Tworzy gałąź i worktree Kroku (jeśli jeszcze nie istnieją). */
+export function prepareStepWorktree(stepId: number): Item {
+  let sub = getItem(stepId);
   const task = getTask(sub.task_id);
-  const repo = subtaskRepo(sub);
+  const repo = stepRepo(sub);
   ensureTaskWorktree(task, repo);
-  const branch = subtaskBranch(sub);
+  const branch = stepBranch(sub);
   const baseRef = sub.base_ref ?? computeBaseRef(sub);
   const dir = ensureWorktree(repo, path.join(worktreeRoot(repo), sub.key), branch, baseRef);
-  sub = setSubtaskFields(sub.id, { branch, worktree_path: dir, base_ref: baseRef });
+  sub = setItemFields(sub.id, { branch, worktree_path: dir, base_ref: baseRef });
   return sub;
 }
 
@@ -143,7 +146,7 @@ export function commitAll(dir: string, message: string): boolean {
   return true;
 }
 
-export interface SubtaskDiff {
+export interface StepDiff {
   repo: string;
   base: string;
   baseRef: string;
@@ -153,24 +156,33 @@ export interface SubtaskDiff {
   uncommitted: boolean;
 }
 
-export function subtaskDiff(sub: Subtask): SubtaskDiff {
+export function stepDiff(sub: Item): StepDiff {
   const empty = { repo: sub.repo ?? "", base: "", baseRef: sub.base_ref ?? "", diff: "", commits: "", needsRebase: false, uncommitted: false };
   if (sub.repo_id == null) return empty;
-  const repo = subtaskRepo(sub);
+  const repo = stepRepo(sub);
   if (!sub.worktree_path || !fs.existsSync(sub.worktree_path) || !sub.base_ref) {
-    // po done worktree jest usunięty — pokazujemy diff z gałęzi
+    // po done worktree jest usunięty — diff z commita merge'a w gałęzi zadania
     const task = getTask(sub.task_id);
-    if (sub.branch && sub.base_ref && isGitRepo(repo.path) && branchExists(repo.path, sub.branch)) {
-      const baseRef = branchExists(repo.path, sub.base_ref) ? sub.base_ref : taskBranch(task);
-      const base = git(repo.path, ["merge-base", baseRef, sub.branch], { allowFail: true });
-      if (base) {
+    const tb = taskBranch(task);
+    if (sub.branch && isGitRepo(repo.path) && branchExists(repo.path, sub.branch) && branchExists(repo.path, tb)) {
+      const tip = git(repo.path, ["rev-parse", sub.branch]);
+      const merge = git(repo.path, ["log", "--merges", "--format=%H %P", tb], { allowFail: true })
+        .split("\n")
+        .map((l) => l.split(" "))
+        .find((parts) => parts[2] === tip);
+      if (merge) {
+        const [m, p1] = merge;
         return {
           ...empty,
-          base,
-          baseRef,
-          diff: git(repo.path, ["diff", "--no-color", "-M", base, sub.branch]),
-          commits: git(repo.path, ["log", "--oneline", `${base}..${sub.branch}`]),
+          base: p1,
+          baseRef: tb,
+          diff: git(repo.path, ["diff", "--no-color", "-M", p1, m]),
+          commits: git(repo.path, ["log", "--oneline", `${p1}..${tip}`]),
         };
+      }
+      const base = git(repo.path, ["merge-base", tb, sub.branch], { allowFail: true });
+      if (base && base !== tip) {
+        return { ...empty, base, baseRef: tb, diff: git(repo.path, ["diff", "--no-color", "-M", base, sub.branch]), commits: git(repo.path, ["log", "--oneline", `${base}..${sub.branch}`]) };
       }
     }
     return empty;
@@ -196,13 +208,13 @@ export function subtaskDiff(sub: Subtask): SubtaskDiff {
   };
 }
 
-/** Rebase podzadania na aktualną bazę. Przy konflikcie wycofuje się i zgłasza błąd. */
-export function rebaseSubtask(subId: number): Subtask {
-  let sub = getSubtask(subId);
-  if (!sub.worktree_path) throw new VkError("Podzadanie nie ma worktree");
+/** Rebase Kroku na aktualną bazę. Przy konflikcie wycofuje się i zgłasza błąd. */
+export function rebaseStep(stepId: number): Item {
+  let sub = getItem(stepId);
+  if (!sub.worktree_path) throw new VkError("Krok nie ma worktree");
   // jeśli zależności są już done, baza przechodzi na gałąź zadania
   const newBase = computeBaseRef(sub);
-  if (newBase !== sub.base_ref) sub = setSubtaskFields(sub.id, { base_ref: newBase });
+  if (newBase !== sub.base_ref) sub = setItemFields(sub.id, { base_ref: newBase });
   const dir = sub.worktree_path!;
   if (hasChanges(dir)) throw new VkError("Worktree ma niezacommitowane zmiany — najpierw commit");
   const r = spawnSync("git", ["rebase", newBase], { cwd: dir, encoding: "utf8" });
@@ -214,18 +226,19 @@ export function rebaseSubtask(subId: number): Subtask {
 }
 
 /**
- * Akceptacja podzadania: commit ewentualnych zmian, merge --no-ff do gałęzi zadania w repo
- * podzadania, usunięcie worktree podzadania (gałąź zostaje), przełączenie zależnych na gałąź zadania.
+ * Akceptacja Kroku: commit ewentualnych zmian, merge --no-ff do gałęzi zadania w repo Kroku,
+ * usunięcie worktree Kroku (gałąź zostaje), przełączenie zależnych Kroków na gałąź zadania.
  */
-export function mergeSubtask(subId: number): Subtask {
-  let sub = getSubtask(subId);
+export function mergeStep(stepId: number): Item {
+  let sub = getItem(stepId);
   const task = getTask(sub.task_id);
-  const repo = subtaskRepo(sub);
-  if (!sub.branch || !branchExists(repo.path, sub.branch)) throw new VkError("Podzadanie nie ma gałęzi do scalenia");
+  const repo = stepRepo(sub);
+  if (!sub.branch || !branchExists(repo.path, sub.branch)) throw new VkError("Krok nie ma gałęzi do scalenia");
   if (sub.worktree_path && fs.existsSync(sub.worktree_path)) {
     commitAll(sub.worktree_path, `${sub.key}: poprawki z review`);
   }
-  const notDoneDeps = listSubtasks(task.id).filter((s) => sub.depends_on.includes(s.key) && s.status !== "done");
+  const items = listItems(task.id);
+  const notDoneDeps = effectiveDeps(items, items.find((i) => i.id === sub.id)!).filter((s) => s.status !== "done");
   if (notDoneDeps.length) {
     throw new VkError(`Najpierw zaakceptuj zależności: ${notDoneDeps.map((s) => s.key).join(", ")}`);
   }
@@ -239,17 +252,18 @@ export function mergeSubtask(subId: number): Subtask {
   if (sub.worktree_path && fs.existsSync(sub.worktree_path)) {
     git(repo.path, ["worktree", "remove", "--force", sub.worktree_path], { allowFail: true });
   }
-  sub = setSubtaskFields(sub.id, { status: "done", worktree_path: null, error: "" });
-  for (const s of listSubtasks(task.id)) {
-    if (s.id === sub.id || !s.depends_on.includes(sub.key) || !s.base_ref) continue;
-    setSubtaskFields(s.id, { base_ref: computeBaseRef(s) });
+  sub = setItemFields(sub.id, { status: "done", worktree_path: null, error: "" });
+  // Kroki, które bazowały na tym Kroku, przechodzą (gdy to możliwe) na gałąź zadania
+  for (const s of listSteps(task.id)) {
+    if (s.id === sub.id || !s.base_ref || s.status === "done") continue;
+    if (s.base_ref === sub.branch) setItemFields(s.id, { base_ref: computeBaseRef(s) });
   }
   return sub;
 }
 
-export function removeSubtaskWorktree(sub: Subtask) {
-  if (sub.repo_id == null || !sub.worktree_path || !fs.existsSync(sub.worktree_path)) return;
-  git(subtaskRepo(sub).path, ["worktree", "remove", "--force", sub.worktree_path], { allowFail: true });
+export function removeStepWorktree(step: Item) {
+  if (step.repo_id == null || !step.worktree_path || !fs.existsSync(step.worktree_path)) return;
+  git(stepRepo(step).path, ["worktree", "remove", "--force", step.worktree_path], { allowFail: true });
 }
 
 /** Klonuje (płytko) repozytorium zasobu do cache, jeśli jeszcze go nie ma. */

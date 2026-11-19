@@ -3,20 +3,24 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { addDirArgs, mcpConfig, promptTemplate, readonlySettings, renderPrompt, resolveResources, sessionSystemPrompt } from "./context.js";
-import { commitAll, ensureTaskWorktree, hasChanges, prepareSubtaskWorktree, subtaskRepo, taskWorktreePath } from "./git.js";
+import { mcpConfig, promptTemplate, readonlySettings, renderPrompt, resolveResources, sessionSystemPrompt } from "./context.js";
+import { commitAll, ensureTaskWorktree, hasChanges, prepareStepWorktree, stepRepo } from "./git.js";
 import { cliPath, subdir } from "./paths.js";
 import {
+  effectiveDeps,
+  getItem,
+  getItemByKey,
   getSettings,
-  listRepos,
-  getSubtask,
-  getSubtaskByKey,
   getTask,
   getTaskByKey,
-  listSubtasks,
-  runnableSubtasks,
-  setSubtaskFields,
-  type Subtask,
+  LEVEL,
+  LEVEL_NAME,
+  listItems,
+  listSteps,
+  listTaskRepos,
+  runnableSteps,
+  setItemFields,
+  type Item,
   type Task,
   VkError,
 } from "./repo.js";
@@ -45,27 +49,30 @@ function runInteractive(args: string[], cwd: string): Promise<number> {
   });
 }
 
-/** Ładuj też CLAUDE.md z katalogów dodanych przez --add-dir (repozytoria projektu). */
+/** Ładuj też CLAUDE.md z katalogów dodanych przez --add-dir (repozytoria ticketu). */
 function claudeEnv() {
   return { ...process.env, CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" };
 }
 
-function commonArgs(kind: "plan" | "impl" | "review", task: Task, sub?: Subtask) {
+function commonArgs(kind: "plan" | "impl" | "review", task: Task, step?: Item) {
   const res = resolveResources(task, true);
-  // pozostałe repozytoria projektu: przy planowaniu do wglądu, przy pracy nad podzadaniem tylko do odczytu
-  const repos = listRepos(task.project_id).filter((r) => r.id !== sub?.repo_id);
-  const repoDirs = repos.map((r) => r.path);
-  const readonly = kind === "plan" ? res : [...res, ...repos.map((r) => ({ name: r.name, scope: "repo", kind: "path", location: r.path, local_path: r.path, note: "" }))];
+  const resDirs = res.map((r) => r.local_path).filter((p): p is string => !!p);
+  // pozostałe repozytoria ticketu: przy planowaniu do wglądu, przy pracy nad Krokiem tylko do odczytu
+  const repoDirs = listTaskRepos(task.id)
+    .filter((r) => r.id !== step?.repo_id)
+    .map((r) => r.path);
+  const readonly = kind === "plan" ? resDirs : [...resDirs, ...repoDirs];
+  const dirs = [...resDirs, ...repoDirs];
   return {
     res,
     args: [
       "--append-system-prompt",
-      sessionSystemPrompt(kind, task, res, sub),
+      sessionSystemPrompt(kind, task, res, step),
       "--mcp-config",
-      mcpConfig(cliPath(), task.key, sub?.key),
+      mcpConfig(cliPath(), task.key, step?.key),
       "--settings",
       readonlySettings(readonly),
-      ...addDirArgs([...res, ...repoDirs.map((p) => ({ name: "", scope: "repo", kind: "path", location: p, local_path: p, note: "" }))]),
+      ...(dirs.length ? ["--add-dir", ...dirs] : []),
     ],
   };
 }
@@ -75,10 +82,10 @@ function planDir(task: Task) {
   return subdir("plan", task.key);
 }
 
-/** vk plan KEY — stała, wznawialna sesja planowania w repozytorium projektu. */
+/** vk plan KEY — stała, wznawialna sesja planowania ticketu. */
 export async function planSession(taskKey: string): Promise<number> {
   const task = getTaskByKey(taskKey);
-  if (listRepos(task.project_id).length === 0) throw new VkError("Projekt nie ma repozytoriów — dodaj je w UI (Ustawienia projektu) lub przez MCP");
+  if (listTaskRepos(task.id).length === 0) console.error("[vk] Uwaga: ticket nie ma repozytoriów — sesja może je dołączyć (vk_attach_repo).");
   const cwd = planDir(task);
   const { res, args } = commonArgs("plan", task);
   const resume = sessionExists(task.plan_session_id);
@@ -86,22 +93,23 @@ export async function planSession(taskKey: string): Promise<number> {
     ? ["--resume", task.plan_session_id]
     : [renderPrompt(promptTemplate(task, "plan"), task, undefined, res), "--session-id", task.plan_session_id];
   console.error(`[vk] ${resume ? "Wznawiam" : "Rozpoczynam"} sesję planowania ${task.key} (${task.plan_session_id})`);
-  console.error(`[vk] Repozytoria: ${listRepos(task.project_id).map((r) => `${r.name} (${r.path})`).join(", ")}`);
+  console.error(`[vk] Repozytoria: ${listTaskRepos(task.id).map((r) => `${r.name} (${r.path})`).join(", ") || "(brak)"}`);
   return runInteractive([...head, "-n", `vk plan ${task.key}`, ...args], cwd);
 }
 
 /**
- * vk open SUBKEY — stała sesja review w worktree podzadania (zna komentarze przez MCP).
- * vk open SUBKEY --agent — wznawia sesję subagenta, który implementował podzadanie.
+ * vk open KROK — stała sesja review w worktree Kroku (zna komentarze przez MCP).
+ * vk open KROK --agent — wznawia sesję subagenta, który wykonał Krok.
  */
-export async function openSession(subKey: string, opts: { agent?: boolean; fresh?: boolean }): Promise<number> {
-  let sub = getSubtaskByKey(subKey);
+export async function openSession(stepKey: string, opts: { agent?: boolean; fresh?: boolean }): Promise<number> {
+  let sub = getItemByKey(stepKey);
+  if (sub.level !== LEVEL.STEP) throw new VkError(`${sub.key} to ${LEVEL_NAME[sub.level]} — sesję pracy otwiera się dla Kroku`);
   const task = getTask(sub.task_id);
   let cwd: string;
   if (sub.status === "done" || ["draft", "todo"].includes(sub.status)) {
-    cwd = ensureTaskWorktree(task, subtaskRepo(sub));
+    cwd = ensureTaskWorktree(task, stepRepo(sub));
   } else {
-    sub = prepareSubtaskWorktree(sub.id);
+    sub = prepareStepWorktree(sub.id);
     cwd = sub.worktree_path!;
   }
   const kind = "review" as const;
@@ -109,7 +117,7 @@ export async function openSession(subKey: string, opts: { agent?: boolean; fresh
   let head: string[];
   if (opts.agent) {
     if (!sub.agent_session_id || !sessionExists(sub.agent_session_id)) {
-      throw new VkError(`Podzadanie ${sub.key} nie ma zapisanej sesji subagenta`);
+      throw new VkError(`Krok ${sub.key} nie ma zapisanej sesji subagenta`);
     }
     head = ["--resume", sub.agent_session_id];
     console.error(`[vk] Wznawiam sesję subagenta ${sub.agent_session_id} (${sub.key}) w ${cwd}`);
@@ -117,7 +125,7 @@ export async function openSession(subKey: string, opts: { agent?: boolean; fresh
     let sid = sub.review_session_id;
     if (!sid || opts.fresh) {
       sid = randomUUID();
-      sub = setSubtaskFields(sub.id, { review_session_id: sid });
+      sub = setItemFields(sub.id, { review_session_id: sid });
     }
     if (sessionExists(sid)) {
       head = ["--resume", sid];
@@ -158,22 +166,24 @@ function printEvent(prefix: string, line: string) {
   }
 }
 
-/** vk exec SUBKEY — uruchamia subagenta (claude -p) dla jednego podzadania. */
-export async function execSubtask(subKey: string, opts: { force?: boolean } = {}): Promise<Subtask> {
-  let sub = getSubtaskByKey(subKey);
+/** vk exec KROK — uruchamia subagenta (claude -p) dla jednego Kroku. */
+export async function execStep(stepKey: string, opts: { force?: boolean } = {}): Promise<Item> {
+  let sub = getItemByKey(stepKey);
+  if (sub.level !== LEVEL.STEP) throw new VkError(`${sub.key} to ${LEVEL_NAME[sub.level]} — wykonywane są tylko Kroki (vk run wykona cały ticket)`);
   const task = getTask(sub.task_id);
   if (!["todo", "blocked", "in_progress"].includes(sub.status)) {
-    throw new VkError(`Podzadanie ${sub.key} ma status ${sub.status} — można uruchomić tylko todo/blocked`);
+    throw new VkError(`Krok ${sub.key} ma status ${sub.status} — można uruchomić tylko todo/blocked`);
   }
-  const notReady = listSubtasks(task.id).filter((s) => sub.depends_on.includes(s.key) && !["review", "done"].includes(s.status));
+  const items = listItems(task.id);
+  const notReady = effectiveDeps(items, items.find((i) => i.id === sub.id)!).filter((s) => !["review", "done"].includes(s.status));
   if (notReady.length && !opts.force) {
     throw new VkError(`Zależności nie są gotowe: ${notReady.map((s) => `${s.key} (${s.status})`).join(", ")}. Użyj --force, aby uruchomić mimo to.`);
   }
-  sub = prepareSubtaskWorktree(sub.id);
+  sub = prepareStepWorktree(sub.id);
   const settings = getSettings();
   const sessionId = randomUUID();
   const logPath = path.join(subdir("logs", task.key), `${sub.key}-${Date.now()}.jsonl`);
-  sub = setSubtaskFields(sub.id, { status: "in_progress", agent_session_id: sessionId, log_path: logPath, error: "" });
+  sub = setItemFields(sub.id, { status: "in_progress", agent_session_id: sessionId, log_path: logPath, error: "" });
 
   const { res, args } = commonArgs("impl", task, sub);
   const prompt = renderPrompt(promptTemplate(task, "impl"), task, sub, res);
@@ -223,15 +233,15 @@ export async function execSubtask(subKey: string, opts: { force?: boolean } = {}
   });
   log.end();
 
-  sub = getSubtask(sub.id);
+  sub = getItem(sub.id);
   if (sub.status === "in_progress") {
     if (code === 0) {
       commitAll(sub.worktree_path!, `${sub.key}: ${sub.title}`);
-      sub = setSubtaskFields(sub.id, { status: "review" });
+      sub = setItemFields(sub.id, { status: "review" });
       console.log(`${prefix} → Review (agent zakończył bez vk_submit_for_review — zmiany zacommitowane automatycznie)`);
     } else {
       const dirty = sub.worktree_path && hasChanges(sub.worktree_path);
-      sub = setSubtaskFields(sub.id, {
+      sub = setItemFields(sub.id, {
         status: "blocked",
         error: `Subagent zakończył się kodem ${code}${dirty ? " (są niezacommitowane zmiany w worktree)" : ""}. Log: ${logPath}`,
       });
@@ -244,29 +254,29 @@ export async function execSubtask(subKey: string, opts: { force?: boolean } = {}
 }
 
 /**
- * vk run KEY — realizuje podzadania zgodnie z kolejnością i zależnościami.
- * Podzadanie rusza, gdy wszystkie jego zależności są w review lub done.
+ * vk run KEY — realizuje Kroki zgodnie z kolejnością planu i zależnościami (także Funkcji i Etapów).
+ * Krok rusza, gdy wszystkie jego efektywne zależności są w Review lub Done.
  */
 export async function runTask(taskKey: string, opts: { concurrency?: number } = {}): Promise<void> {
   const task = getTaskByKey(taskKey);
-  if (listSubtasks(task.id).some((s) => s.status === "draft")) {
-    console.log(`[vk] Uwaga: część podzadań jest w Draft (niezaakceptowana) — zostaną pominięte.`);
+  if (listItems(task.id).some((s) => s.status === "draft")) {
+    console.log(`[vk] Uwaga: część planu jest w Draft (niezaakceptowana) — te Kroki zostaną pominięte.`);
   }
   const limit = Math.max(1, opts.concurrency ?? (Number(getSettings().concurrency) || 1));
   const running = new Map<number, Promise<void>>();
   const failed = new Set<number>();
 
   for (;;) {
-    const candidates = runnableSubtasks(task.id).filter((s) => !running.has(s.id) && !failed.has(s.id));
+    const candidates = runnableSteps(task.id).filter((s) => !running.has(s.id) && !failed.has(s.id));
     while (running.size < limit && candidates.length) {
       const s = candidates.shift()!;
-      const p = execSubtask(s.key)
+      const p = execStep(s.key)
         .then((r) => {
           if (r.status !== "review" && r.status !== "done") failed.add(s.id);
         })
         .catch((e) => {
           failed.add(s.id);
-          setSubtaskFields(s.id, { status: "blocked", error: String((e as Error).message) });
+          setItemFields(s.id, { status: "blocked", error: String((e as Error).message) });
           console.error(`[${s.key}] błąd: ${(e as Error).message}`);
         })
         .finally(() => running.delete(s.id));
@@ -276,12 +286,17 @@ export async function runTask(taskKey: string, opts: { concurrency?: number } = 
     await Promise.race(running.values());
   }
 
-  const subs = listSubtasks(task.id);
+  const subs = listSteps(task.id);
   const left = subs.filter((s) => s.status === "todo");
   console.log(`\n[vk] Koniec. Review: ${subs.filter((s) => s.status === "review").length}, ` +
     `blocked: ${subs.filter((s) => s.status === "blocked").length}, done: ${subs.filter((s) => s.status === "done").length}`);
   if (left.length) {
-    console.log(`[vk] Czekają (zależności nie są gotowe): ${left.map((s) => `${s.key} ← ${s.depends_on.join(", ")}`).join("; ")}`);
+    const items = listItems(task.id);
+    console.log(
+      `[vk] Czekają (zależności nie są gotowe lub plan niezaakceptowany): ${left
+        .map((s) => `${s.key} ← ${effectiveDeps(items, s).filter((d) => !["review", "done"].includes(d.status)).map((d) => d.key).join(", ") || "Draft"}`)
+        .join("; ")}`,
+    );
   }
 }
 

@@ -1,20 +1,12 @@
-export type SubtaskStatus = "draft" | "todo" | "in_progress" | "review" | "done" | "blocked";
+export type ItemStatus = "draft" | "todo" | "in_progress" | "review" | "done" | "blocked";
 
 export interface Repo {
   id: number;
-  project_id: number;
   name: string;
   path: string;
   base_branch: string;
+  test_command: string;
   description: string;
-}
-
-export interface Project {
-  id: number;
-  name: string;
-  description: string;
-  assumptions: string;
-  repos: Repo[];
 }
 
 export interface Link {
@@ -24,7 +16,6 @@ export interface Link {
 
 export interface Task {
   id: number;
-  project_id: number;
   key: string;
   title: string;
   description: string;
@@ -37,20 +28,24 @@ export interface Task {
   review_prompt: string | null;
   status: string;
   plan_session_id: string;
-  subtasks?: { key: string; status: SubtaskStatus }[];
+  repos?: string[];
+  steps?: { key: string; status: ItemStatus }[];
 }
 
-export interface Subtask {
+export interface Item {
   id: number;
   task_id: number;
+  parent_id: number | null;
+  level: 1 | 2 | 3;
   key: string;
-  number: number;
   position: number;
   title: string;
   description: string;
   problem: string;
   acceptance: string;
-  status: SubtaskStatus;
+  kind: "test" | "impl";
+  status: ItemStatus;
+  display_status: ItemStatus;
   repo_id: number | null;
   repo: string | null;
   branch: string | null;
@@ -62,12 +57,12 @@ export interface Subtask {
   error: string;
   depends_on: string[];
   open_comments: number;
-  commands: { open: string; agent: string | null; exec: string };
+  commands: { open: string; agent: string | null; exec: string } | null;
 }
 
 export interface Resource {
   id: number;
-  scope: "global" | "project" | "task";
+  scope: "global" | "task";
   scope_id: number | null;
   name: string;
   kind: "path" | "git";
@@ -88,8 +83,8 @@ export interface Comment {
 
 export interface TaskView {
   task: Task;
-  project: Project;
-  subtasks: Subtask[];
+  repos: Repo[];
+  items: Item[];
   resources: Resource[];
   commands: { plan: string; run: string; plan_session_started: boolean };
   task_branch: string;
@@ -124,7 +119,7 @@ export const api = {
   del: <T>(url: string) => req<T>("DELETE", url),
 };
 
-export const STATUS_LABEL: Record<SubtaskStatus, string> = {
+export const STATUS_LABEL: Record<ItemStatus, string> = {
   draft: "Draft",
   todo: "Todo",
   in_progress: "W trakcie",
@@ -133,4 +128,9 @@ export const STATUS_LABEL: Record<SubtaskStatus, string> = {
   blocked: "Blocked",
 };
 
-export const COLUMNS: SubtaskStatus[] = ["draft", "todo", "in_progress", "review", "done", "blocked"];
+export const LEVEL_NAME: Record<number, string> = { 1: "Etap", 2: "Funkcja", 3: "Krok" };
+
+export const COLUMNS: ItemStatus[] = ["draft", "todo", "in_progress", "review", "done", "blocked"];
+
+/** Krótki klucz elementu bez klucza ticketu, np. "1.2.3". */
+export const shortKey = (taskKey: string, key: string) => (key.startsWith(`${taskKey}-`) ? key.slice(taskKey.length + 1) : key);

@@ -1,8 +1,12 @@
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { vkHome } from "./paths.js";
 
 let db: DatabaseSync | null = null;
+
+/** Wersja schematu. Starsze bazy (bez zgodnej wersji) są odkładane jako kopia zapasowa. */
+const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -10,30 +14,19 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS projects (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  description TEXT NOT NULL DEFAULT '',
-  assumptions TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- repozytoria projektu (np. frontend, backend)
+-- globalna lista repozytoriów; ticket wskazuje, których dotyczy
 CREATE TABLE IF NOT EXISTS repos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  path TEXT NOT NULL,
+  name TEXT NOT NULL UNIQUE,
+  path TEXT NOT NULL UNIQUE,
   base_branch TEXT NOT NULL DEFAULT 'main',
+  test_command TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (project_id, name),
-  UNIQUE (project_id, path)
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   key TEXT NOT NULL UNIQUE,
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
@@ -51,16 +44,26 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS subtasks (
+CREATE TABLE IF NOT EXISTS task_repos (
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  PRIMARY KEY (task_id, repo_id)
+);
+
+-- elementy planu: poziom 1 = Etap, 2 = Funkcja, 3 = Krok (wykonywany przez subagenta)
+CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  parent_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+  level INTEGER NOT NULL,
   key TEXT NOT NULL UNIQUE,
-  number INTEGER NOT NULL,
   position INTEGER NOT NULL,
+  next_child INTEGER NOT NULL DEFAULT 1,
   title TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   problem TEXT NOT NULL DEFAULT '',
-  acceptance TEXT NOT NULL DEFAULT '',
+  acceptance TEXT NOT NULL DEFAULT '',     -- Funkcja: testy akceptacyjne; Krok: kryteria
+  kind TEXT NOT NULL DEFAULT 'impl',       -- Krok: test | impl
   status TEXT NOT NULL DEFAULT 'draft',
   repo_id INTEGER REFERENCES repos(id) ON DELETE SET NULL,
   branch TEXT,
@@ -75,15 +78,15 @@ CREATE TABLE IF NOT EXISTS subtasks (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS subtask_deps (
-  subtask_id INTEGER NOT NULL REFERENCES subtasks(id) ON DELETE CASCADE,
-  depends_on_id INTEGER NOT NULL REFERENCES subtasks(id) ON DELETE CASCADE,
-  PRIMARY KEY (subtask_id, depends_on_id)
+CREATE TABLE IF NOT EXISTS item_deps (
+  item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  depends_on_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  PRIMARY KEY (item_id, depends_on_id)
 );
 
 CREATE TABLE IF NOT EXISTS resources (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  scope TEXT NOT NULL,            -- global | project | task
+  scope TEXT NOT NULL,            -- global | task
   scope_id INTEGER,               -- NULL dla global
   name TEXT NOT NULL,
   kind TEXT NOT NULL,             -- path | git
@@ -93,7 +96,7 @@ CREATE TABLE IF NOT EXISTS resources (
 
 CREATE TABLE IF NOT EXISTS comments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  subtask_id INTEGER NOT NULL REFERENCES subtasks(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   file TEXT,
   line INTEGER,
   side TEXT,                      -- new | old
@@ -105,67 +108,31 @@ CREATE TABLE IF NOT EXISTS comments (
 );
 `;
 
-function columns(d: DatabaseSync, table: string): string[] {
-  return (d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
-}
-
-/**
- * Migracja z wersji 0.1 (projekt = jedno repo) do projektu z wieloma repozytoriami:
- * każde dotychczasowe repo staje się repozytorium projektu, podzadania dostają repo_id.
- */
-function migrate(d: DatabaseSync) {
-  if (!columns(d, "projects").includes("repo_path")) return;
-  d.exec("PRAGMA foreign_keys = OFF");
-  // nie przepinaj kluczy obcych tasks -> projects na tabelę projects_v1
-  d.exec("PRAGMA legacy_alter_table = ON");
-  d.exec("BEGIN");
-  try {
-    d.exec(`
-      ALTER TABLE projects RENAME TO projects_v1;
-      CREATE TABLE projects (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE,
-        description TEXT NOT NULL DEFAULT '',
-        assumptions TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
-      );
-      INSERT INTO projects(id, name, assumptions, created_at)
-        SELECT id, name || CASE WHEN (SELECT COUNT(*) FROM projects_v1 p2 WHERE p2.name = projects_v1.name AND p2.id < projects_v1.id) > 0
-                               THEN '-' || id ELSE '' END, assumptions, created_at FROM projects_v1;
-    `);
-    d.exec(SCHEMA); // tworzy tabelę repos
-    d.exec(`
-      INSERT INTO repos(project_id, name, path, base_branch)
-        SELECT id, 'repo-' || id, repo_path, base_branch FROM projects_v1;
-      DROP TABLE projects_v1;
-    `);
-    // nazwa repozytorium = nazwa katalogu
-    for (const r of d.prepare("SELECT id, path FROM repos").all() as { id: number; path: string }[]) {
-      d.prepare("UPDATE repos SET name = ? WHERE id = ?").run(path.basename(r.path) || `repo-${r.id}`, r.id);
-    }
-    if (!columns(d, "subtasks").includes("repo_id")) {
-      d.exec("ALTER TABLE subtasks ADD COLUMN repo_id INTEGER REFERENCES repos(id) ON DELETE SET NULL");
-    }
-    d.exec(`UPDATE subtasks SET repo_id = (SELECT r.id FROM repos r JOIN tasks t ON t.project_id = r.project_id
-                                            WHERE t.id = subtasks.task_id ORDER BY r.id LIMIT 1)`);
-    d.exec("COMMIT");
-  } catch (e) {
-    d.exec("ROLLBACK");
-    throw e;
-  } finally {
-    d.exec("PRAGMA legacy_alter_table = OFF");
-    d.exec("PRAGMA foreign_keys = ON");
-  }
+function open(file: string): DatabaseSync {
+  const d = new DatabaseSync(file);
+  d.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
+  return d;
 }
 
 export function getDb(): DatabaseSync {
   if (db) return db;
-  db = new DatabaseSync(path.join(vkHome(), "vk.db"));
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
-  const fresh = (db.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'projects'").get() as { c: number }).c === 0;
-  if (!fresh) migrate(db);
-  db.exec(SCHEMA);
-  db.exec("PRAGMA foreign_keys = ON");
+  const file = path.join(vkHome(), "vk.db");
+  let d = open(file);
+  const version = (d.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+  const hasTables = (d.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type = 'table'").get() as { c: number }).c > 0;
+  if (hasTables && version !== SCHEMA_VERSION) {
+    // niezgodna (starsza) baza — odkładamy ją i zaczynamy od nowa
+    d.close();
+    const backup = `${file}.v${version || 1}-${Date.now()}.bak`;
+    fs.renameSync(file, backup);
+    for (const ext of ["-wal", "-shm"]) if (fs.existsSync(file + ext)) fs.rmSync(file + ext);
+    process.stderr.write(`[vk] Baza w starszym formacie została przeniesiona do ${backup}; utworzono nową.\n`);
+    d = open(file);
+  }
+  d.exec(SCHEMA);
+  d.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  d.exec("PRAGMA foreign_keys = ON");
+  db = d;
   return db;
 }
 
@@ -183,9 +150,14 @@ export function run(sql: string, ...params: Param[]) {
   return getDb().prepare(sql).run(...params);
 }
 
+let depth = 0;
+
+/** Transakcja (zagnieżdżone wywołania działają w ramach zewnętrznej). */
 export function tx<T>(fn: () => T): T {
   const d = getDb();
+  if (depth > 0) return fn();
   d.exec("BEGIN IMMEDIATE");
+  depth++;
   try {
     const r = fn();
     d.exec("COMMIT");
@@ -193,5 +165,7 @@ export function tx<T>(fn: () => T): T {
   } catch (e) {
     d.exec("ROLLBACK");
     throw e;
+  } finally {
+    depth--;
   }
 }

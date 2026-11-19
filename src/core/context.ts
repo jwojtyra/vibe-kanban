@@ -3,14 +3,18 @@ import path from "node:path";
 import { ensureGitResource, taskBranch, taskWorktreePath } from "./git.js";
 import { slug, subdir } from "./paths.js";
 import {
+  childrenOf,
+  derivedStatus,
   effectiveResources,
-  getProject,
+  getRepo,
   getSettings,
-  listRepos,
+  LEVEL,
+  LEVEL_NAME,
   listComments,
-  listSubtasks,
+  listItems,
+  listTaskRepos,
   type Comment,
-  type Subtask,
+  type Item,
   type Task,
 } from "./repo.js";
 
@@ -44,62 +48,87 @@ export function resolveResources(task: Task, clone: boolean): ResolvedResource[]
   });
 }
 
+// ---------- widoki dla MCP ----------
+
+export function reposContext(task: Task) {
+  return listTaskRepos(task.id).map((r) => ({
+    name: r.name,
+    path: r.path,
+    base_branch: r.base_branch,
+    test_command: r.test_command || undefined,
+    description: r.description || undefined,
+    task_worktree: taskWorktreePath(task, r),
+  }));
+}
+
+/** Zwięzły widok elementu planu. */
+export function itemSummary(items: Item[], i: Item) {
+  return {
+    key: i.key,
+    type: LEVEL_NAME[i.level],
+    title: i.title,
+    status: derivedStatus(items, i),
+    ...(i.level === LEVEL.STEP ? { repo: i.repo, kind: i.kind } : {}),
+    depends_on: i.depends_on.length ? i.depends_on : undefined,
+    description: i.description || undefined,
+    problem: i.problem || undefined,
+    [i.level === LEVEL.FEATURE ? "acceptance_tests" : "acceptance"]: i.acceptance || undefined,
+    summary: i.summary || undefined,
+  };
+}
+
+type TreeNode = ReturnType<typeof itemSummary> & { children?: TreeNode[] };
+
+/** Plan w postaci drzewa Etap → Funkcja → Krok. */
+export function planTree(task: Task): TreeNode[] {
+  const items = listItems(task.id);
+  const node = (i: Item): TreeNode => {
+    const ch = childrenOf(items, i.id);
+    return { ...itemSummary(items, i), ...(ch.length ? { children: ch.map(node) } : {}) };
+  };
+  return childrenOf(items, null).map(node);
+}
+
 export function taskContext(task: Task) {
-  const project = getProject(task.project_id);
-  const subs = listSubtasks(task.id);
   return {
     key: task.key,
     title: task.title,
     description: task.description,
     ticket: task.ticket_url ? { id: task.ticket_id, url: task.ticket_url } : null,
     links: task.links,
-    assumptions: {
-      project: project.assumptions,
-      task: task.assumptions,
-    },
-    project: { name: project.name, description: project.description || undefined },
+    assumptions: { global: getSettings().assumptions || undefined, task: task.assumptions || undefined },
     repositories: reposContext(task),
     task_branch: taskBranch(task),
     resources_readonly: resolveResources(task, false),
     status: task.status,
-    subtasks: subs.map(subtaskSummary),
+    plan: planTree(task),
   };
 }
 
-/** Repozytoria projektu: ścieżka, gałąź bazowa, gałąź i worktree zadania w danym repo. */
-export function reposContext(task: Task) {
-  return listRepos(task.project_id).map((r) => ({
-    name: r.name,
-    path: r.path,
-    base_branch: r.base_branch,
-    description: r.description || undefined,
-    task_worktree: taskWorktreePath(task, r),
-  }));
-}
-
-export function subtaskSummary(s: Subtask) {
+/** Szczegóły elementu: z rodzicami (Funkcja, Etap), dziećmi i komentarzami. */
+export function itemContext(item: Item) {
+  const items = listItems(item.task_id);
+  const parents: ReturnType<typeof itemSummary>[] = [];
+  let p = item.parent_id ? items.find((i) => i.id === item.parent_id) : undefined;
+  while (p) {
+    parents.push(itemSummary(items, p));
+    const pid = p.parent_id;
+    p = pid ? items.find((i) => i.id === pid) : undefined;
+  }
   return {
-    key: s.key,
-    repo: s.repo,
-    position: s.position,
-    title: s.title,
-    status: s.status,
-    depends_on: s.depends_on,
-    description: s.description,
-    problem: s.problem,
-    acceptance: s.acceptance,
-    summary: s.summary || undefined,
-  };
-}
-
-export function subtaskContext(s: Subtask) {
-  return {
-    ...subtaskSummary(s),
-    branch: s.branch,
-    worktree_path: s.worktree_path,
-    base_ref: s.base_ref,
-    error: s.error || undefined,
-    review_comments: listComments(s.id, true).map(commentView),
+    ...itemSummary(items, item),
+    parents,
+    children: childrenOf(items, item.id).map((c) => itemSummary(items, c)),
+    ...(item.level === LEVEL.STEP
+      ? {
+          branch: item.branch,
+          worktree_path: item.worktree_path,
+          base_ref: item.base_ref,
+          test_command: item.repo_id ? getRepo(item.repo_id).test_command || undefined : undefined,
+          error: item.error || undefined,
+          review_comments: listComments(item.id, true).map(commentView),
+        }
+      : {}),
   };
 }
 
@@ -125,16 +154,19 @@ export function promptTemplate(task: Task, kind: PromptKind): string {
   return own ?? getSettings()[`${kind}_prompt`];
 }
 
-function reposText(task: Task) {
-  return (
-    listRepos(task.project_id)
-      .map((r) => `- ${r.name}: ${r.path} (baza ${r.base_branch})${r.description ? ` — ${r.description}` : ""}`)
-      .join("\n") || "(brak)"
-  );
-}
-
 function linksText(task: Task) {
   return task.links.map((l) => `- ${l.url}${l.note ? ` — ${l.note}` : ""}`).join("\n") || "(brak)";
+}
+
+function reposText(task: Task) {
+  return (
+    listTaskRepos(task.id)
+      .map(
+        (r) =>
+          `- ${r.name}: ${r.path} (baza ${r.base_branch}${r.test_command ? `, testy: ${r.test_command}` : ""})${r.description ? ` — ${r.description}` : ""}`,
+      )
+      .join("\n") || "(brak — dołącz repozytoria do ticketu)"
+  );
 }
 
 function resourcesText(res: ResolvedResource[]) {
@@ -154,8 +186,7 @@ function commentsText(comments: Comment[]) {
   );
 }
 
-export function renderPrompt(tpl: string, task: Task, sub?: Subtask, res?: ResolvedResource[]): string {
-  const project = getProject(task.project_id);
+export function renderPrompt(tpl: string, task: Task, step?: Item, res?: ResolvedResource[]): string {
   const vars: Record<string, string> = {
     "task.key": task.key,
     "task.title": task.title,
@@ -164,65 +195,68 @@ export function renderPrompt(tpl: string, task: Task, sub?: Subtask, res?: Resol
     "task.ticket_url": task.ticket_url || "(brak)",
     "task.assumptions": task.assumptions || "(brak)",
     "task.links": linksText(task),
-    "project.name": project.name,
+    assumptions: getSettings().assumptions || "(brak)",
     repos: reposText(task),
-    "project.assumptions": project.assumptions || "(brak)",
     resources: resourcesText(res ?? resolveResources(task, false)),
   };
-  if (sub) {
+  if (step) {
+    const items = listItems(task.id);
+    const feature = items.find((i) => i.id === step.parent_id);
+    const stage = feature ? items.find((i) => i.id === feature.parent_id) : undefined;
+    const testCmd = step.repo_id ? getRepo(step.repo_id).test_command : "";
     Object.assign(vars, {
-      "subtask.key": sub.key,
-      "subtask.title": sub.title,
-      "subtask.description": sub.description || "(brak)",
-      "subtask.problem": sub.problem || "(brak)",
-      "subtask.acceptance": sub.acceptance || "(brak)",
-      "subtask.deps": sub.depends_on.join(", ") || "(brak)",
-      comments: commentsText(listComments(sub.id, false)),
+      "step.key": step.key,
+      "step.title": step.title,
+      "step.kind": step.kind === "test" ? "test — testy akceptacyjne (czerwone)" : "impl — implementacja",
+      "step.description": step.description || "(brak)",
+      "step.acceptance": step.acceptance || "(brak)",
+      "step.repo": step.repo ?? "(brak)",
+      "step.test_command": testCmd || "(nie ustawiono — znajdź właściwą komendę w repozytorium)",
+      "feature.key": feature?.key ?? "",
+      "feature.title": feature?.title ?? "",
+      "feature.description": feature?.description || "(brak)",
+      "feature.problem": feature?.problem || "(brak)",
+      "feature.acceptance": feature?.acceptance || "(brak)",
+      "stage.key": stage?.key ?? "",
+      "stage.title": stage?.title ?? "",
+      comments: commentsText(listComments(step.id, false)),
     });
   }
   return tpl.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (m, k: string) => (k in vars ? vars[k] : m));
 }
 
 /** Tekst dołączany do system promptu każdej sesji (--append-system-prompt). */
-export function sessionSystemPrompt(kind: PromptKind, task: Task, res: ResolvedResource[], sub?: Subtask): string {
-  const project = getProject(task.project_id);
+export function sessionSystemPrompt(kind: PromptKind, task: Task, res: ResolvedResource[], step?: Item): string {
   const role =
     kind === "plan"
-      ? "To jest sesja PLANOWANIA zadania. Analizujesz i rozbijasz zadanie na podzadania na tablicy kanban. Nie implementujesz kodu."
+      ? "To jest sesja PLANOWANIA ticketu. Analizujesz i rozbijasz go na plan: Etapy → Funkcje → Kroki. Nie implementujesz kodu."
       : kind === "impl"
-        ? `To jest sesja IMPLEMENTACJI podzadania ${sub?.key} uruchomiona automatycznie (subagent). Pracujesz w worktree podzadania.`
-        : `To jest sesja pracy nad podzadaniem ${sub?.key} (review / poprawki) w jego worktree.`;
+        ? `To jest sesja IMPLEMENTACJI Kroku ${step?.key} uruchomiona automatycznie (subagent). Pracujesz w worktree Kroku.`
+        : `To jest sesja pracy nad Krokiem ${step?.key} (review / poprawki) w jego worktree.`;
+  const globalAssumptions = getSettings().assumptions;
   return [
     "# vibe-kanban",
     role,
-    "",
-    `Zadanie główne: ${task.key} — ${task.title}`,
-    task.ticket_url ? `Ticket: ${task.ticket_id} (${task.ticket_url})` : "",
-    `Projekt: ${project.name}${project.description ? ` — ${project.description}` : ""}`,
-    sub ? `Podzadanie: ${sub.key} — ${sub.title}; repozytorium ${sub.repo}; gałąź ${sub.branch}; baza ${sub.base_ref}` : "",
-    "",
-    "Masz serwer MCP `vibe-kanban` (narzędzia vk_*) z pełnym kontekstem zadania, podzadań i komentarzy z review.",
-    "Zawsze korzystaj z vk_get_task, gdy potrzebujesz opisu, założeń, linków lub zasobów.",
-    "",
-    "## Repozytoria projektu",
+    `Ticket: ${task.key} — ${task.title}`,
+    task.ticket_url ? `Link: ${task.ticket_id} (${task.ticket_url})` : "",
+    step ? `Krok: ${step.key} — ${step.title}; repozytorium ${step.repo}; gałąź ${step.branch}; baza ${step.base_ref}` : "",
+    "Masz serwer MCP `vibe-kanban` (narzędzia vk_*) z pełnym kontekstem ticketu, planu i komentarzy z review.",
+    "## Poziomy planu",
+    "1. Etap — gruby klocek do dalszego podziału. 2. Funkcja — dowozi zmianę funkcjonalną (API lub zachowanie) i ma testy akceptacyjne dowodzące, że działa. 3. Krok — najmniejszy klocek, w jednym repo, wykonywany i recenzowany osobno. Preferowane test-first: Krok z testami (czerwone), potem Kroki, które je zazieleniają.",
+    "## Repozytoria ticketu",
     kind === "plan"
-      ? "Zadanie może wymagać zmian w kilku repozytoriach. Każde podzadanie dotyczy JEDNEGO repo (parametr repo w vk_create_subtask). Zależności między repo wyrażaj przez depends_on."
-      : `Pracujesz w repozytorium ${sub?.repo}. Pozostałe repozytoria projektu są dostępne TYLKO DO ODCZYTU (np. żeby sprawdzić kontrakt API).`,
+      ? "Każdy Krok dotyczy JEDNEGO repo (parametr repo w vk_create_step). Funkcja może mieć Kroki w kilku repo."
+      : `Pracujesz w repozytorium ${step?.repo}. Pozostałe repozytoria ticketu są dostępne TYLKO DO ODCZYTU.`,
     reposText(task),
-    "",
-    "## Założenia projektu",
-    project.assumptions || "(brak)",
-    "",
-    "## Założenia zadania",
+    "## Założenia globalne",
+    globalAssumptions || "(brak)",
+    "## Założenia ticketu",
     task.assumptions || "(brak)",
-    "",
     "## Linki do wykorzystania",
     linksText(task),
-    "",
     "## Zasoby referencyjne — TYLKO DO ODCZYTU",
-    "Możesz je czytać i wzorować się na nich. Nigdy ich nie modyfikuj (żadnych edycji, zapisów, komend git zmieniających stan).",
+    "Możesz je czytać i wzorować się na nich. Nigdy ich nie modyfikuj.",
     resourcesText(res),
-    "",
     "## Zasady",
     "- Wszystko dzieje się lokalnie: nie wykonuj `git push`, nie twórz pull requestów, nie publikuj niczego.",
   ]
@@ -233,30 +267,20 @@ export function sessionSystemPrompt(kind: PromptKind, task: Task, res: ResolvedR
 
 // ---------- uruchamianie claude ----------
 
-export function mcpConfig(cli: string, taskKey: string, subKey?: string): string {
+export function mcpConfig(cli: string, taskKey: string, itemKey?: string): string {
   const args = ["--no-warnings", cli, "mcp", "--task", taskKey];
-  if (subKey) args.push("--subtask", subKey);
+  if (itemKey) args.push("--item", itemKey);
   const env: Record<string, string> = {};
   if (process.env.VK_HOME) env.VK_HOME = process.env.VK_HOME;
   return JSON.stringify({ mcpServers: { "vibe-kanban": { command: process.execPath, args, env } } });
 }
 
-/** Ustawienia z regułami deny dla zasobów tylko do odczytu. */
-export function readonlySettings(res: ResolvedResource[]): string {
+/** Ustawienia z regułami deny dla ścieżek tylko do odczytu. */
+export function readonlySettings(paths: string[]): string {
   const deny: string[] = [];
-  for (const r of res) {
-    if (!r.local_path) continue;
-    const p = `/${r.local_path.replace(/\/+$/, "")}/**`; // "//abs/path/**" = ścieżka absolutna
+  for (const lp of paths) {
+    const p = `/${lp.replace(/\/+$/, "")}/**`; // "//abs/path/**" = ścieżka absolutna
     deny.push(`Edit(${p})`, `Write(${p})`, `NotebookEdit(${p})`);
   }
   return JSON.stringify({ permissions: { deny } });
-}
-
-export function addDirArgs(res: ResolvedResource[]): string[] {
-  const dirs = res.map((r) => r.local_path).filter((p): p is string => !!p);
-  return dirs.length ? ["--add-dir", ...dirs] : [];
-}
-
-export function commentsForTask(task: Task) {
-  return listSubtasks(task.id).flatMap((s) => listComments(s.id, false).map((c) => ({ subtask: s.key, ...commentView(c) })));
 }

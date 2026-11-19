@@ -1,28 +1,35 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { commentView, subtaskContext, subtaskSummary, taskContext } from "../core/context.js";
+import { commentView, itemContext, itemSummary, taskContext } from "../core/context.js";
 import { commitAll } from "../core/git.js";
-import { addRepo, createProjectWithRepos, projectSummary, projectView } from "../core/projects.js";
+import { addRepo } from "../core/repos.js";
 import {
+  attachRepo,
+  createItem,
   createTask,
-  findProject,
+  deleteItem,
+  derivedStatus,
+  findRepo,
   getSettings,
-  listProjects,
-  updateProject,
-  createSubtask,
-  deleteSubtask,
   getTask,
   getTaskByKey,
+  LEVEL,
+  LEVEL_NAME,
   listComments,
-  listSubtasks,
-  reorderSubtasks,
-  resolveSubtaskRef,
-  runnableSubtasks,
-  setSubtaskFields,
+  listItems,
+  listRepos,
+  listTaskRepos,
+  listTasks,
+  reorderItems,
+  resolveItemRef,
+  runnableSteps,
+  setItemFields,
   updateComment,
-  updateSubtask,
-  type Subtask,
+  updateItem,
+  updateRepo,
+  type Item,
+  type ItemInput,
   VkError,
 } from "../core/repo.js";
 
@@ -47,266 +54,247 @@ const wrap =
 const depsSchema = z
   .array(z.union([z.string(), z.number()]))
   .optional()
-  .describe("Zależności: klucze (np. PROJ-1-2) lub numery podzadań, które muszą być zrobione wcześniej");
+  .describe("Zależności: klucze elementów TEGO SAMEGO poziomu (pełne, np. SHOP-1-1.2, albo krótkie, np. 1.2)");
 
 /**
- * Serwer MCP ograniczony do jednego zadania (i opcjonalnie podzadania).
- * Uruchamiany przez sesje Claude Code: vk mcp --task KEY [--subtask KEY]
+ * Serwer MCP vibe-kanban (stdio).
+ *  - bez --task: tryb globalny (repozytoria, tickety),
+ *  - z --task: dodatkowo narzędzia planu i realizacji ticketu (opcjonalnie --item = bieżący Krok).
  */
-export async function startMcpServer(taskKey?: string, subtaskKey?: string) {
-  const server = new McpServer({ name: "vibe-kanban", version: "0.2.0" });
-  const task0 = taskKey ? getTaskByKey(taskKey) : undefined;
-  registerAdminTools(server, task0?.project_id);
-  if (task0) registerTaskTools(server, task0.id, subtaskKey);
+export async function startMcpServer(taskKey?: string, itemKey?: string) {
+  const server = new McpServer({ name: "vibe-kanban", version: "0.3.0" });
+  registerGlobalTools(server);
+  if (taskKey) registerTaskTools(server, getTaskByKey(taskKey).id, itemKey);
   await server.connect(new StdioServerTransport());
 }
 
-const repoInput = z.object({
+const repoInput = {
   path: z.string().describe("Ścieżka do lokalnego repozytorium git"),
   name: z.string().optional().describe("Krótka nazwa, np. frontend / backend (domyślnie nazwa katalogu)"),
   base_branch: z.string().optional().describe("Gałąź bazowa (domyślnie bieżąca gałąź repo)"),
-  description: z.string().optional().describe("Czego dotyczy repo (pomaga agentom przydzielać podzadania)"),
-});
+  test_command: z.string().optional().describe("Komenda uruchamiająca testy, np. npm test"),
+  description: z.string().optional().describe("Czego dotyczy repo"),
+};
 
-/** Narzędzia do zarządzania projektami, repozytoriami i zadaniami (dostępne w każdej sesji). */
-function registerAdminTools(server: McpServer, defaultProjectId?: number) {
-  const project = (ref?: string | number) => {
-    if (ref !== undefined && ref !== "") return findProject(ref);
-    if (defaultProjectId !== undefined) return findProject(defaultProjectId);
-    throw new VkError("Podaj projekt (nazwa lub ID)");
-  };
-
+function registerGlobalTools(server: McpServer) {
   server.registerTool(
-    "vk_list_projects",
-    { description: "Lista projektów vibe-kanban z ich repozytoriami.", inputSchema: {} },
-    wrap(() => listProjects().map(projectView)),
-  );
-
-  server.registerTool(
-    "vk_get_project",
-    {
-      description: "Projekt: repozytoria, założenia i lista zadań. Bez parametru — projekt bieżącego zadania.",
-      inputSchema: { project: z.string().optional().describe("Nazwa lub ID projektu") },
-    },
-    wrap(({ project: p }: { project?: string }) => projectSummary(project(p).id)),
-  );
-
-  server.registerTool(
-    "vk_create_project",
-    {
-      description:
-        "Tworzy projekt grupujący jedno lub więcej lokalnych repozytoriów (np. frontend i backend). Jedno zadanie/ticket może obejmować zmiany we wszystkich repo projektu.",
-      inputSchema: {
-        name: z.string().describe("Unikalna nazwa projektu"),
-        description: z.string().optional(),
-        assumptions: z.string().optional().describe("Założenia projektu przekazywane do każdej sesji"),
-        repos: z.array(repoInput).optional().describe("Repozytoria projektu"),
-      },
-    },
-    wrap((a: { name: string; description?: string; assumptions?: string; repos?: z.infer<typeof repoInput>[] }) => createProjectWithRepos(a)),
+    "vk_list_repos",
+    { description: "Globalna lista repozytoriów znanych vibe-kanban.", inputSchema: {} },
+    wrap(() => listRepos()),
   );
 
   server.registerTool(
     "vk_add_repo",
-    {
-      description: "Dodaje lokalne repozytorium git do projektu. Bez parametru project — do projektu bieżącego zadania.",
-      inputSchema: { project: z.string().optional().describe("Nazwa lub ID projektu"), ...repoInput.shape },
-    },
-    wrap((a: { project?: string } & z.infer<typeof repoInput>) => addRepo(project(a.project).id, a)),
+    { description: "Dodaje lokalne repozytorium git do globalnej listy (potem można je dołączać do ticketów).", inputSchema: repoInput },
+    wrap((a: { path: string; name?: string; base_branch?: string; test_command?: string; description?: string }) => addRepo(a)),
   );
 
   server.registerTool(
-    "vk_update_project",
+    "vk_update_repo",
     {
-      description: "Aktualizuje opis lub założenia projektu.",
-      inputSchema: { project: z.string().optional(), description: z.string().optional(), assumptions: z.string().optional() },
+      description: "Zmienia gałąź bazową, komendę testów lub opis repozytorium.",
+      inputSchema: { repo: z.string().describe("Nazwa repo"), base_branch: z.string().optional(), test_command: z.string().optional(), description: z.string().optional() },
     },
-    wrap((a: { project?: string; description?: string; assumptions?: string }) =>
-      projectView(updateProject(project(a.project).id, { description: a.description, assumptions: a.assumptions })),
-    ),
+    wrap((a: { repo: string; base_branch?: string; test_command?: string; description?: string }) => updateRepo(findRepo(a.repo).id, a)),
+  );
+
+  server.registerTool(
+    "vk_list_tasks",
+    { description: "Lista ticketów vibe-kanban.", inputSchema: {} },
+    wrap(() => listTasks().map((t) => ({ key: t.key, title: t.title, status: t.status, repos: listTaskRepos(t.id).map((r) => r.name) }))),
   );
 
   server.registerTool(
     "vk_create_task",
     {
       description:
-        "Tworzy zadanie (ticket) w projekcie. Z linku do ticketu (np. Jira) wyciągany jest klucz zadania. Zwraca polecenie do rozpoczęcia planowania.",
+        "Tworzy ticket. Z linku do ticketu (np. Jira) wyciągany jest klucz. repos — nazwy repozytoriów z globalnej listy, których dotyczy ticket. Zwraca polecenie do rozpoczęcia planowania.",
       inputSchema: {
-        project: z.string().optional().describe("Nazwa lub ID projektu"),
         title: z.string(),
         ticket_url: z.string().optional(),
         description: z.string().optional(),
         assumptions: z.string().optional(),
         links: z.array(z.object({ url: z.string(), note: z.string().optional() })).optional(),
+        repos: z.array(z.string()).optional(),
       },
     },
-    wrap((a: { project?: string; title: string; ticket_url?: string; description?: string; assumptions?: string; links?: { url: string; note?: string }[] }) => {
-      const t = createTask({ ...a, project_id: project(a.project).id });
+    wrap((a: { title: string; ticket_url?: string; description?: string; assumptions?: string; links?: { url: string; note?: string }[]; repos?: string[] }) => {
+      const t = createTask(a);
       const cli = getSettings().cli_command || "vk";
-      return { key: t.key, title: t.title, ticket_id: t.ticket_id || undefined, plan_command: `${cli} plan ${t.key}` };
+      return { key: t.key, title: t.title, ticket_id: t.ticket_id || undefined, repos: listTaskRepos(t.id).map((r) => r.name), plan_command: `${cli} plan ${t.key}` };
     }),
   );
 }
 
-/** Narzędzia ograniczone do jednego zadania (i opcjonalnie podzadania). */
-function registerTaskTools(server: McpServer, taskId: number, subtaskKey?: string) {
-  const defaultSub = subtaskKey ? resolveSubtaskRef(taskId, subtaskKey) : undefined;
-
-  const sub = (ref?: string | number): Subtask => {
-    if (ref !== undefined && ref !== "") return resolveSubtaskRef(taskId, ref);
-    if (defaultSub) return resolveSubtaskRef(taskId, defaultSub.key);
-    throw new VkError("Podaj klucz podzadania");
+function registerTaskTools(server: McpServer, taskId: number, itemKey?: string) {
+  const current = (ref?: string | number): Item => {
+    if (ref !== undefined && ref !== "") return resolveItemRef(taskId, ref);
+    if (itemKey) return resolveItemRef(taskId, itemKey);
+    throw new VkError("Podaj klucz elementu");
   };
-
+  const summary = (i: Item) => itemSummary(listItems(taskId), i);
+  const common = {
+    title: z.string().describe("Krótki tytuł"),
+    description: z.string().describe("Co dokładnie zrobić / co się zmienia"),
+    position: z.number().int().positive().optional().describe("Pozycja wśród rodzeństwa (1 = pierwsze); domyślnie na końcu"),
+    depends_on: depsSchema,
+  };
 
   server.registerTool(
     "vk_get_task",
     {
       description:
-        "Pełny kontekst zadania głównego: opis, ticket, linki, założenia (projektu i zadania), zasoby referencyjne (tylko do odczytu), lista podzadań ze statusami i zależnościami.",
+        "Pełny kontekst ticketu: opis, link, linki, założenia, repozytoria (ścieżki, komendy testów), zasoby referencyjne (tylko do odczytu) i plan jako drzewo Etap → Funkcja → Krok ze statusami.",
       inputSchema: {},
     },
     wrap(() => taskContext(getTask(taskId))),
   );
 
   server.registerTool(
-    "vk_list_subtasks",
-    { description: "Lista podzadań w kolejności, ze statusami i zależnościami.", inputSchema: {} },
-    wrap(() => listSubtasks(taskId).map(subtaskSummary)),
+    "vk_attach_repo",
+    {
+      description: "Dołącza repozytorium z globalnej listy do ticketu (gdy brakuje go w ticket.repositories). Nowe repo dodaj najpierw przez vk_add_repo.",
+      inputSchema: { repo: z.string().describe("Nazwa lub ścieżka repo") },
+    },
+    wrap(({ repo }: { repo: string }) => attachRepo(taskId, repo)),
   );
 
   server.registerTool(
-    "vk_get_subtask",
+    "vk_get_item",
     {
-      description: "Szczegóły podzadania: opis, problem, kryteria, gałąź, worktree, komentarze z review. Bez klucza — bieżące podzadanie sesji.",
-      inputSchema: { key: z.string().optional().describe("Klucz lub numer podzadania") },
+      description: "Szczegóły elementu planu (Etap/Funkcja/Krok) z rodzicami, dziećmi i — dla Kroku — gałęzią, worktree i komentarzami z review. Bez klucza — bieżący Krok sesji.",
+      inputSchema: { key: z.string().optional() },
     },
-    wrap(({ key }: { key?: string }) => subtaskContext(sub(key))),
+    wrap(({ key }: { key?: string }) => itemContext(current(key))),
   );
 
   server.registerTool(
-    "vk_create_subtask",
+    "vk_create_stage",
     {
-      description:
-        "Tworzy podzadanie (status Draft — wymaga akceptacji człowieka w UI). Używaj w sesji planowania po uzgodnieniu planu.",
-      inputSchema: {
-        repo: z.string().optional().describe("Repozytorium projektu, którego dotyczy podzadanie (wymagane, gdy projekt ma kilka repo)"),
-        title: z.string().describe("Krótki tytuł"),
-        description: z.string().describe("Co dokładnie zrobić"),
-        problem: z.string().describe("Jaki problem rozwiązuje to podzadanie"),
-        acceptance_criteria: z.string().optional().describe("Kryteria akceptacji (lista)"),
-        position: z.number().int().positive().optional().describe("Pozycja w kolejności (1 = pierwsze); domyślnie na końcu"),
-        depends_on: depsSchema,
-      },
+      description: "Tworzy ETAP (poziom 1): gruby klocek pracy, dzielony dalej na Funkcje. Status Draft — wymaga akceptacji człowieka.",
+      inputSchema: { ...common, problem: z.string().optional().describe("Jaki problem rozwiązuje") },
     },
-    wrap((a: { repo?: string; title: string; description: string; problem: string; acceptance_criteria?: string; position?: number; depends_on?: (string | number)[] }) =>
-      subtaskSummary(
-        createSubtask(taskId, {
-          repo: a.repo,
-          title: a.title,
-          description: a.description,
-          problem: a.problem,
-          acceptance: a.acceptance_criteria,
-          position: a.position,
-          depends_on: a.depends_on,
-        }),
-      ),
+    wrap((a: { title: string; description: string; problem?: string; position?: number; depends_on?: (string | number)[] }) =>
+      summary(createItem(taskId, LEVEL.STAGE, a)),
     ),
   );
 
   server.registerTool(
-    "vk_update_subtask",
+    "vk_create_feature",
     {
-      description: "Aktualizuje podzadanie w statusie Draft lub Todo (pola, pozycję, zależności).",
+      description:
+        "Tworzy FUNKCJĘ (poziom 2) w Etapie: dowozi jedną zmianę funkcjonalną (API lub zachowanie). Musi mieć testy akceptacyjne dowodzące, że funkcjonalność działa. Może obejmować kilka repo (przez Kroki).",
       inputSchema: {
-        key: z.string().describe("Klucz lub numer podzadania"),
-        repo: z.string().optional(),
+        stage: z.string().describe("Klucz Etapu-rodzica"),
+        ...common,
+        problem: z.string().describe("Jaki problem rozwiązuje / jaka zmiana zachowania"),
+        acceptance_tests: z.string().describe("Scenariusze testów akceptacyjnych (lista), które po realizacji Funkcji są zielone"),
+      },
+    },
+    wrap((a: { stage: string; title: string; description: string; problem: string; acceptance_tests: string; position?: number; depends_on?: (string | number)[] }) =>
+      summary(createItem(taskId, LEVEL.FEATURE, { ...a, parent: a.stage, acceptance: a.acceptance_tests })),
+    ),
+  );
+
+  server.registerTool(
+    "vk_create_step",
+    {
+      description:
+        "Tworzy KROK (poziom 3) w Funkcji: najmniejszy klocek w JEDNYM repozytorium, wykonywany przez subagenta w osobnym worktree i osobno recenzowany. kind='test' — Krok dodający testy akceptacyjne (czerwone); kind='impl' — implementacja zazieleniająca testy.",
+      inputSchema: {
+        feature: z.string().describe("Klucz Funkcji-rodzica"),
+        repo: z.string().optional().describe("Repozytorium Kroku (wymagane, gdy ticket ma kilka repo)"),
+        kind: z.enum(["test", "impl"]).optional().describe("test | impl (domyślnie impl)"),
+        ...common,
+        acceptance: z.string().optional().describe("Kryteria akceptacji Kroku"),
+      },
+    },
+    wrap((a: { feature: string; repo?: string; kind?: "test" | "impl"; title: string; description: string; acceptance?: string; position?: number; depends_on?: (string | number)[] }) =>
+      summary(createItem(taskId, LEVEL.STEP, { ...a, parent: a.feature })),
+    ),
+  );
+
+  server.registerTool(
+    "vk_update_item",
+    {
+      description: "Aktualizuje element planu w statusie Draft lub Todo (pola, pozycję, zależności; Krok — też repo i kind).",
+      inputSchema: {
+        key: z.string(),
         title: z.string().optional(),
         description: z.string().optional(),
         problem: z.string().optional(),
-        acceptance_criteria: z.string().optional(),
+        acceptance: z.string().optional().describe("Funkcja: testy akceptacyjne; Krok: kryteria"),
+        repo: z.string().optional(),
+        kind: z.enum(["test", "impl"]).optional(),
         position: z.number().int().positive().optional(),
         depends_on: depsSchema,
       },
     },
-    wrap((a: { key: string; repo?: string; title?: string; description?: string; problem?: string; acceptance_criteria?: string; position?: number; depends_on?: (string | number)[] }) => {
-      const s = sub(a.key);
-      if (!["draft", "todo"].includes(s.status)) throw new VkError(`Podzadanie ${s.key} ma status ${s.status} — edycja tylko w Draft/Todo`);
-      return subtaskSummary(
-        updateSubtask(s.id, {
-          repo: a.repo,
-          title: a.title,
-          description: a.description,
-          problem: a.problem,
-          acceptance: a.acceptance_criteria,
-          position: a.position,
-          depends_on: a.depends_on,
-        }),
-      );
+    wrap((a: { key: string } & ItemInput) => {
+      const it = current(a.key);
+      const st = derivedStatus(listItems(taskId), it);
+      if (!["draft", "todo"].includes(st)) throw new VkError(`${it.key} ma status ${st} — edycja tylko w Draft/Todo`);
+      return summary(updateItem(it.id, a));
     }),
   );
 
   server.registerTool(
-    "vk_delete_subtask",
-    { description: "Usuwa podzadanie w statusie Draft.", inputSchema: { key: z.string() } },
+    "vk_delete_item",
+    { description: "Usuwa element planu w Draft (razem z jego dziećmi).", inputSchema: { key: z.string() } },
     wrap(({ key }: { key: string }) => {
-      const s = sub(key);
-      if (s.status !== "draft") throw new VkError("Usuwać można tylko podzadania w Draft");
-      deleteSubtask(s.id);
-      return `Usunięto ${s.key}`;
+      const it = current(key);
+      const sub = listItems(taskId).filter((i) => i.key === it.key || i.key.startsWith(`${it.key}.`));
+      if (sub.some((i) => i.status !== "draft")) throw new VkError("Usuwać można tylko elementy w Draft (łącznie z dziećmi)");
+      deleteItem(it.id);
+      return `Usunięto ${it.key}${sub.length > 1 ? ` i ${sub.length - 1} elementów podrzędnych` : ""}`;
     }),
   );
 
   server.registerTool(
-    "vk_reorder_subtasks",
+    "vk_reorder_items",
     {
-      description: "Ustala kolejność podzadań (lista kluczy/numerów od pierwszego). Niewymienione trafiają na koniec.",
+      description: "Ustala kolejność rodzeństwa (klucze elementów o wspólnym rodzicu, od pierwszego).",
       inputSchema: { order: z.array(z.union([z.string(), z.number()])) },
     },
     wrap(({ order }: { order: (string | number)[] }) => {
-      reorderSubtasks(taskId, order);
-      return listSubtasks(taskId).map((s) => `${s.position}. ${s.key} ${s.title}`).join("\n");
+      reorderItems(taskId, order);
+      return listItems(taskId).map((i) => `${"  ".repeat(i.level - 1)}${i.key} ${i.title}`).join("\n");
     }),
   );
 
   server.registerTool(
-    "vk_next_subtasks",
-    { description: "Podzadania gotowe do realizacji (Todo, zależności w Review/Done).", inputSchema: {} },
-    wrap(() => runnableSubtasks(taskId).map(subtaskSummary)),
+    "vk_next_steps",
+    { description: "Kroki gotowe do realizacji (Todo, zależności — także Funkcji i Etapów — w Review/Done).", inputSchema: {} },
+    wrap(() => runnableSteps(taskId).map(summary)),
   );
 
   server.registerTool(
     "vk_list_comments",
     {
-      description: "Komentarze z review dla podzadania (plik, linia, treść). Bez klucza — bieżące podzadanie.",
+      description: "Komentarze z review Kroku (plik, linia, treść). Bez klucza — bieżący Krok.",
       inputSchema: { key: z.string().optional(), include_resolved: z.boolean().optional() },
     },
-    wrap(({ key, include_resolved }: { key?: string; include_resolved?: boolean }) =>
-      listComments(sub(key).id, include_resolved ?? false).map(commentView),
-    ),
+    wrap(({ key, include_resolved }: { key?: string; include_resolved?: boolean }) => listComments(current(key).id, include_resolved ?? false).map(commentView)),
   );
 
   server.registerTool(
     "vk_resolve_comment",
-    {
-      description: "Oznacza komentarz z review jako rozwiązany, z krótkim opisem co zrobiono.",
-      inputSchema: { id: z.number().int(), resolution: z.string() },
-    },
+    { description: "Oznacza komentarz z review jako rozwiązany, z opisem, co zrobiono.", inputSchema: { id: z.number().int(), resolution: z.string() } },
     wrap(({ id, resolution }: { id: number; resolution: string }) => commentView(updateComment(id, { resolved: true, resolution }))),
   );
 
   server.registerTool(
     "vk_submit_for_review",
     {
-      description:
-        "Kończy implementację podzadania: commituje pozostałe zmiany w worktree i przenosi podzadanie do Review. Wywołaj na końcu pracy.",
-      inputSchema: { key: z.string().optional(), summary: z.string().describe("Krótkie podsumowanie zmian dla recenzenta") },
+      description: "Kończy Krok: commituje pozostałe zmiany w worktree i przenosi Krok do Review. Wywołaj na końcu pracy.",
+      inputSchema: { key: z.string().optional(), summary: z.string().describe("Podsumowanie zmian dla recenzenta, w tym stan testów") },
     },
-    wrap(({ key, summary }: { key?: string; summary: string }) => {
-      const s = sub(key);
-      if (!s.worktree_path) throw new VkError("Podzadanie nie ma worktree");
+    wrap(({ key, summary: text }: { key?: string; summary: string }) => {
+      const s = current(key);
+      if (s.level !== LEVEL.STEP) throw new VkError(`${s.key} to ${LEVEL_NAME[s.level]} — do review trafiają Kroki`);
+      if (!s.worktree_path) throw new VkError("Krok nie ma worktree");
       const committed = commitAll(s.worktree_path, `${s.key}: ${s.title}`);
-      setSubtaskFields(s.id, { status: "review", summary, error: "" });
+      setItemFields(s.id, { status: "review", summary: text, error: "" });
       return `${s.key} → Review${committed ? " (zacommitowano pozostałe zmiany)" : ""}`;
     }),
   );

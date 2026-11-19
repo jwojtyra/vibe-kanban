@@ -1,56 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Project, type Task } from "./api";
+import { api, type Repo, type Task, type TaskView } from "./api";
 import { Field, Modal, useToast } from "./common";
-import { emptyRepo, RepoDraftRows, type RepoDraft } from "./Repos";
-import { ProjectSettings, SettingsModal } from "./Settings";
+import { RepoPicker, ReposModal } from "./Repos";
+import { SettingsModal } from "./Settings";
 import { TaskPage } from "./TaskPage";
 
-function NewProjectModal({ onClose, onCreated, onError }: { onClose: () => void; onCreated: (p: Project) => void; onError: (m: string) => void }) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [repos, setRepos] = useState<RepoDraft[]>([emptyRepo()]);
-  return (
-    <Modal title="Nowy projekt" onClose={onClose} wide>
-      <form
-        className="stack"
-        onSubmit={(e) => {
-          e.preventDefault();
-          api
-            .post<Project>("/api/projects", { name, description, repos: repos.filter((r) => r.path.trim()) })
-            .then(onCreated)
-            .catch((err) => onError(err.message));
-        }}
-      >
-        <Field label="Nazwa projektu">
-          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="np. Sklep" />
-        </Field>
-        <Field label="Opis (opcjonalnie)">
-          <input value={description} onChange={(e) => setDescription(e.target.value)} />
-        </Field>
-        <div className="field">
-          <span className="field-label">Repozytoria</span>
-          <span className="muted small">
-            Jeden projekt może mieć kilka lokalnych repozytoriów (np. frontend i backend) — jeden ticket obejmie zmiany we wszystkich. Każde podzadanie
-            dotyczy jednego repo.
-          </span>
-          <RepoDraftRows rows={repos} onChange={setRepos} />
-        </div>
-        <div className="row-end">
-          <button className="btn btn-primary" type="submit">
-            Utwórz projekt
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function NewTaskModal({ project, onClose, onCreated, onError }: { project: Project; onClose: () => void; onCreated: (id: number) => void; onError: (m: string) => void }) {
-  const [fromTicket, setFromTicket] = useState(true);
+function NewTaskModal({
+  repos,
+  onClose,
+  onCreated,
+  onOpenRepos,
+  onError,
+}: {
+  repos: Repo[];
+  onClose: () => void;
+  onCreated: (id: number) => void;
+  onOpenRepos: () => void;
+  onError: (m: string) => void;
+}) {
   const [ticketUrl, setTicketUrl] = useState("");
   const [ticketId, setTicketId] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
   useEffect(() => {
     if (!ticketUrl) return setTicketId("");
     const t = setTimeout(() => {
@@ -59,43 +31,36 @@ function NewTaskModal({ project, onClose, onCreated, onError }: { project: Proje
     return () => clearTimeout(t);
   }, [ticketUrl]);
   return (
-    <Modal title="Nowe zadanie" onClose={onClose}>
-      <div className="segmented">
-        <button className={fromTicket ? "active" : ""} onClick={() => setFromTicket(true)}>
-          Z ticketu
-        </button>
-        <button className={!fromTicket ? "active" : ""} onClick={() => setFromTicket(false)}>
-          Puste
-        </button>
-      </div>
+    <Modal title="Nowy ticket" onClose={onClose} wide>
       <form
         className="stack"
         onSubmit={(e) => {
           e.preventDefault();
           api
-            .post<{ task: Task }>(`/api/projects/${project.id}/tasks`, {
-              title,
-              description,
-              ticket_url: fromTicket ? ticketUrl : "",
-            })
+            .post<TaskView>("/api/tasks", { title, description, ticket_url: ticketUrl, repos: selected })
             .then((r) => onCreated(r.task.id))
-            .catch((e) => onError(e.message));
+            .catch((err) => onError(err.message));
         }}
       >
-        {fromTicket && (
-          <Field label="Link do ticketu (Jira, GitHub, GitLab…)" hint={ticketId ? `ID ticketu: ${ticketId} — będzie kluczem zadania` : "Wklej link — ID zostanie wyciągnięte automatycznie."}>
-            <input autoFocus value={ticketUrl} onChange={(e) => setTicketUrl(e.target.value)} placeholder="https://firma.atlassian.net/browse/PROJ-123" />
-          </Field>
-        )}
+        <Field label="Link do ticketu (Jira, GitHub, GitLab…) — opcjonalnie" hint={ticketId ? `ID ticketu: ${ticketId} — będzie kluczem` : "Wklej link — ID zostanie wyciągnięte automatycznie."}>
+          <input autoFocus value={ticketUrl} onChange={(e) => setTicketUrl(e.target.value)} placeholder="https://firma.atlassian.net/browse/PROJ-123" />
+        </Field>
         <Field label="Tytuł">
-          <input autoFocus={!fromTicket} value={title} onChange={(e) => setTitle(e.target.value)} placeholder={ticketId || "Co ma zostać zrobione"} />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={ticketId || "Co ma zostać zrobione"} />
         </Field>
         <Field label="Opis (opcjonalnie — możesz uzupełnić później)">
-          <textarea rows={5} value={description} onChange={(e) => setDescription(e.target.value)} />
+          <textarea rows={4} value={description} onChange={(e) => setDescription(e.target.value)} />
         </Field>
+        <div className="field">
+          <span className="field-label">Repozytoria, których dotyczy ticket</span>
+          <RepoPicker all={repos} selected={selected} onToggle={(n, on) => setSelected(on ? [...selected, n] : selected.filter((x) => x !== n))} />
+          <button type="button" className="btn btn-ghost btn-small align-start" onClick={onOpenRepos}>
+            + Dodaj repozytorium do listy
+          </button>
+        </div>
         <div className="row-end">
           <button className="btn btn-primary" type="submit">
-            Utwórz zadanie
+            Utwórz ticket
           </button>
         </div>
       </form>
@@ -109,78 +74,45 @@ export function App() {
   const toast = useToast();
   const showToast = toast.show;
   const onError = useCallback((m: string) => showToast(m, true), [showToast]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState<number | null>(null);
+  const [repos, setRepos] = useState<Repo[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [taskId, setTaskId] = useState<number | null>(null);
-  const [modal, setModal] = useState<"project" | "task" | "settings" | "projectSettings" | null>(null);
+  const [taskId, setTaskId] = useState<number | null>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE) ?? "{}").taskId ?? null;
+    } catch {
+      return null;
+    }
+  });
+  const [modal, setModal] = useState<"task" | "settings" | "repos" | null>(null);
+  const [reposReturn, setReposReturn] = useState(false);
 
-  const project = projects.find((p) => p.id === projectId) ?? null;
-
-  const loadProjects = () =>
-    api.get<Project[]>("/api/projects").then((ps) => {
-      setProjects(ps);
-      let saved: { projectId?: number; taskId?: number } = {};
-      try {
-        saved = JSON.parse(localStorage.getItem(STORAGE) ?? "{}");
-      } catch {
-        /* brak */
-      }
-      setProjectId((cur) => cur ?? (ps.find((p) => p.id === saved.projectId)?.id ?? ps[0]?.id ?? null));
-      setTaskId((cur) => cur ?? saved.taskId ?? null);
-    });
-  const loadTasks = useCallback(() => {
-    if (projectId == null) return setTasks([]);
-    api.get<Task[]>(`/api/projects/${projectId}/tasks`).then(setTasks).catch((e) => onError(e.message));
-  }, [projectId, onError]);
+  const loadRepos = useCallback(() => api.get<Repo[]>("/api/repos").then(setRepos).catch((e) => onError(e.message)), [onError]);
+  const loadTasks = useCallback(() => api.get<Task[]>("/api/tasks").then(setTasks).catch((e) => onError(e.message)), [onError]);
 
   useEffect(() => {
-    loadProjects().catch((e) => onError(e.message));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  useEffect(() => {
+    loadRepos();
     loadTasks();
     const t = setInterval(loadTasks, 5000);
     return () => clearInterval(t);
-  }, [loadTasks]);
+  }, [loadRepos, loadTasks]);
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE, JSON.stringify({ projectId, taskId }));
+      localStorage.setItem(STORAGE, JSON.stringify({ taskId }));
     } catch {
       /* brak */
     }
-  }, [projectId, taskId]);
+  }, [taskId]);
 
-  const taskInProject = tasks.some((t) => t.id === taskId);
+  const taskExists = tasks.some((t) => t.id === taskId);
 
   return (
     <div className="app">
       <header className="topbar">
         <div className="brand">vibe-kanban</div>
-        <select
-          value={projectId ?? ""}
-          onChange={(e) => {
-            setProjectId(Number(e.target.value));
-            setTaskId(null);
-          }}
-        >
-          {projects.length === 0 && <option value="">— brak projektów —</option>}
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.repos.length > 0 ? ` (${p.repos.map((r) => r.name).join(", ")})` : ""}
-            </option>
-          ))}
-        </select>
-        <button className="btn btn-small" onClick={() => setModal("project")}>
-          + Projekt
-        </button>
-        {project && (
-          <button className="btn btn-small btn-ghost" onClick={() => setModal("projectSettings")}>
-            Ustawienia projektu
-          </button>
-        )}
         <div className="grow" />
+        <button className="btn btn-small btn-ghost" onClick={() => setModal("repos")}>
+          Repozytoria ({repos.length})
+        </button>
         <button className="btn btn-small btn-ghost" onClick={() => setModal("settings")}>
           Ustawienia
         </button>
@@ -189,46 +121,63 @@ export function App() {
       <div className="layout">
         <aside className="sidebar">
           <div className="sidebar-head">
-            <span>Zadania</span>
-            {project && (
-              <button className="btn btn-small btn-primary" onClick={() => setModal("task")}>
-                + Zadanie
-              </button>
-            )}
+            <span>Tickety</span>
+            <button className="btn btn-small btn-primary" onClick={() => setModal("task")}>
+              + Ticket
+            </button>
           </div>
-          {!project && <div className="muted small pad">Dodaj projekt (jedno lub kilka lokalnych repozytoriów git), aby zacząć.</div>}
-          {project && project.repos.length === 0 && (
-            <div className="muted small pad">
-              Projekt nie ma repozytoriów — dodaj je w <a href="#" onClick={(e) => (e.preventDefault(), setModal("projectSettings"))}>ustawieniach projektu</a>.
-            </div>
-          )}
+          {tasks.length === 0 && <div className="muted small pad">Brak ticketów.</div>}
           {tasks.map((t) => {
-            const subs = t.subtasks ?? [];
-            const done = subs.filter((s) => s.status === "done").length;
-            const review = subs.filter((s) => s.status === "review").length;
+            const steps = t.steps ?? [];
+            const done = steps.filter((s) => s.status === "done").length;
+            const review = steps.filter((s) => s.status === "review").length;
             return (
               <button key={t.id} className={`task-item ${t.id === taskId ? "active" : ""}`} onClick={() => setTaskId(t.id)}>
                 <div className="task-item-key mono">{t.key}</div>
                 <div className="task-item-title">{t.title}</div>
                 <div className="muted small">
-                  {subs.length ? `${done}/${subs.length} done` : "bez podzadań"}
+                  {steps.length ? `${done}/${steps.length} kroków done` : "bez planu"}
                   {review ? ` · ${review} w review` : ""}
                 </div>
+                {t.repos && t.repos.length > 0 && (
+                  <div className="task-item-repos">
+                    {t.repos.map((r) => (
+                      <span key={r} className="tag tag-repo">
+                        {r}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </button>
             );
           })}
         </aside>
         <main className="main">
-          {project && taskId != null && taskInProject ? (
-            <TaskPage key={taskId} taskId={taskId} onError={onError} onToast={(m) => toast.show(m)} onChanged={loadTasks} onDeleted={() => (setTaskId(null), loadTasks())} />
+          {taskId != null && taskExists ? (
+            <TaskPage
+              key={taskId}
+              taskId={taskId}
+              allRepos={repos}
+              onError={onError}
+              onToast={(m) => toast.show(m)}
+              onChanged={loadTasks}
+              onOpenRepos={() => setModal("repos")}
+              onDeleted={() => {
+                setTaskId(null);
+                loadTasks();
+              }}
+            />
           ) : (
             <div className="empty">
               <h2>Lokalny kanban dla Claude Code</h2>
               <ol>
-                <li>Dodaj projekt z jednym lub kilkoma repozytoriami (np. frontend + backend) i zadanie — np. z linku do ticketu.</li>
+                <li>Dodaj repozytoria (górny pasek → Repozytoria) i utwórz ticket — np. z linku do Jiry — wskazując repo, których dotyczy.</li>
                 <li>Uzupełnij linki, założenia, zasoby referencyjne i ewentualnie prompty.</li>
-                <li>Skopiuj polecenie planowania do terminala — Claude rozbije zadanie na podzadania.</li>
-                <li>Zaakceptuj plan, uruchom realizację, a potem przeglądaj i komentuj w Review.</li>
+                <li>
+                  Skopiuj polecenie planowania do terminala — Claude rozbije ticket na <b>Etapy</b> → <b>Funkcje</b> (zmiana zachowania + testy akceptacyjne) →{" "}
+                  <b>Kroki</b> (najmniejsze klocki; najpierw czerwone testy, potem implementacja).
+                </li>
+                <li>Zaakceptuj plan, uruchom realizację, a potem przeglądaj i komentuj Kroki w Review.</li>
               </ol>
               <p className="muted small">Ta strona nigdy nie wysyła niczego do Claude — pracę wykonują sesje uruchamiane z terminala.</p>
             </div>
@@ -236,23 +185,15 @@ export function App() {
         </main>
       </div>
 
-      {modal === "project" && (
-        <NewProjectModal
-          onClose={() => setModal(null)}
-          onError={onError}
-          onCreated={(p) => {
-            setModal(null);
-            loadProjects();
-            setProjectId(p.id);
-            setTaskId(null);
-          }}
-        />
-      )}
-      {modal === "task" && project && (
+      {modal === "task" && (
         <NewTaskModal
-          project={project}
+          repos={repos}
           onClose={() => setModal(null)}
           onError={onError}
+          onOpenRepos={() => {
+            setReposReturn(true);
+            setModal("repos");
+          }}
           onCreated={(id) => {
             setModal(null);
             loadTasks();
@@ -260,24 +201,17 @@ export function App() {
           }}
         />
       )}
-      {modal === "settings" && <SettingsModal onClose={() => setModal(null)} onError={onError} onSaved={() => toast.show("Zapisano ustawienia")} />}
-      {modal === "projectSettings" && project && (
-        <ProjectSettings
-          project={project}
-          onClose={() => setModal(null)}
+      {modal === "repos" && (
+        <ReposModal
+          onClose={() => {
+            setModal(reposReturn ? "task" : null);
+            setReposReturn(false);
+          }}
+          onChanged={loadRepos}
           onError={onError}
-          onSaved={() => {
-            loadProjects();
-            toast.show("Zapisano projekt");
-          }}
-          onDeleted={() => {
-            setModal(null);
-            setProjectId(null);
-            setTaskId(null);
-            loadProjects();
-          }}
         />
       )}
+      {modal === "settings" && <SettingsModal onClose={() => setModal(null)} onError={onError} onSaved={() => toast.show("Zapisano ustawienia")} />}
       {toast.node}
     </div>
   );

@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import { startHttpServer } from "./http/server.js";
 import { startMcpServer } from "./mcp/server.js";
-import { execSubtask, openSession, planSession, runTask } from "./core/sessions.js";
+import { execStep, openSession, planSession, runTask } from "./core/sessions.js";
 
 const program = new Command();
 program.name("vk").description("vibe-kanban — lokalny kanban zadań dla Claude Code").version("0.1.0");
@@ -26,28 +26,28 @@ program
 
 program
   .command("run <taskKey>")
-  .description("Realizuje zaakceptowane podzadania (subagenci w worktree), wynik -> Review")
+  .description("Realizuje zaakceptowane Kroki (subagenci w worktree), wynik -> Review")
   .option("-c, --concurrency <n>", "ile podzadań równolegle")
   .action((key, o) => runTask(key, { concurrency: o.concurrency ? Number(o.concurrency) : undefined }).then(() => process.exit(0), fatal));
 
 program
-  .command("exec <subtaskKey>")
-  .description("Uruchamia subagenta dla jednego podzadania")
+  .command("exec <stepKey>")
+  .description("Uruchamia subagenta dla jednego Kroku")
   .option("--force", "uruchom mimo niegotowych zależności")
-  .action((key, o) => execSubtask(key, o).then(() => process.exit(0), fatal));
+  .action((key, o) => execStep(key, o).then(() => process.exit(0), fatal));
 
 program
-  .command("open <subtaskKey>")
-  .description("Otwiera sesję pracy/review nad podzadaniem (zna komentarze i zadanie główne)")
+  .command("open <stepKey>")
+  .description("Otwiera sesję pracy/review nad Krokiem (zna komentarze, Funkcję i ticket)")
   .option("--agent", "wznów sesję subagenta, który implementował podzadanie")
   .option("--fresh", "rozpocznij nową sesję review zamiast wznawiać poprzednią")
   .action((key, o) => openSession(key, o).then((c) => process.exit(c), fatal));
 
 program
   .command("mcp")
-  .description("Serwer MCP (stdio). Bez --task: tryb globalny (projekty, repozytoria, zadania)")
+  .description("Serwer MCP (stdio). Bez --task: tryb globalny (repozytoria, tickety)")
   .option("--task <key>")
-  .option("--subtask <key>")
-  .action((o) => startMcpServer(o.task, o.subtask).catch(fatal));
+  .option("--item <key>", "bieżący Krok sesji")
+  .action((o) => startMcpServer(o.task, o.item).catch(fatal));
 
 program.parseAsync().catch(fatal);
