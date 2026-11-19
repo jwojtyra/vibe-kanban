@@ -9,6 +9,7 @@ if ! docker info >/dev/null 2>&1; then
   exit 0
 fi
 [ "$(docker inspect -f '{{.State.Running}}' vibe-kanban 2>/dev/null)" = "true" ] && exit 0
-nohup "$ROOT/scripts/vk-docker.sh" up -d --build >"$HOME/.vk/docker.log" 2>&1 </dev/null &
+# bez --build: uruchamia istniejący obraz (zbuduje go tylko, gdy go brak)
+nohup "$ROOT/scripts/vk-docker.sh" up -d >"$HOME/.vk/docker.log" 2>&1 </dev/null &
 echo "vibe-kanban: uruchamiam serwer w tle (log: ~/.vk/docker.log)."
 exit 0

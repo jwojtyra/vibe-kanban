@@ -27,8 +27,10 @@ W Claude Code:
 /vibe-kanban:setup ~/projects
 ```
 
-- `/plugin install` pobiera aplikację (z `Dockerfile`), a `/vibe-kanban:setup` buduje i uruchamia
-  serwer w Dockerze; katalog to miejsce, w którym trzymasz repozytoria (montowany w kontenerze).
+- `/plugin install` pobiera aplikację, a `/vibe-kanban:setup` uruchamia serwer w Dockerze:
+  pobiera gotowy obraz `ghcr.io/jwojtyra/vibe-kanban` (publikowany przez CI z `master`),
+  a gdy jest niedostępny (np. prywatne repo bez `docker login ghcr.io`) — buduje go lokalnie
+  (`VK_BUILD=1` wymusza build). Katalog to miejsce, w którym trzymasz repozytoria (montowany w kontenerze).
 - Od następnych sesji hook pluginu sam uruchamia kontener w tle, jeśli nie działa.
 - Plugin rejestruje MCP `vibe-kanban` (przez `docker exec`) i skill, który uczy Claude modelu
   Etap → Funkcja → Krok, oraz komendy `/vibe-kanban:setup` i `/vibe-kanban:ticket`

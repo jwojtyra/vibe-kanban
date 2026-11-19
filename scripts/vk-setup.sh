@@ -10,8 +10,16 @@ docker info >/dev/null 2>&1 || { echo "vibe-kanban: Docker nie działa albo brak
 "$ROOT/scripts/docker-setup.sh" "$@"
 # shellcheck disable=SC1091
 . "$HOME/.vk/docker.env"
-echo "Buduję i uruchamiam kontener (pierwszy raz może potrwać kilka minut)..."
-"$ROOT/scripts/vk-docker.sh" up -d --build
+# Gotowy obraz z GitHub Container Registry (szybko); gdy niedostępny — lokalny build.
+IMAGE="${VK_IMAGE:-ghcr.io/jwojtyra/vibe-kanban:latest}"
+if [ "${VK_BUILD:-0}" != "1" ] && docker pull "$IMAGE" >/dev/null 2>&1; then
+  echo "Pobrano obraz $IMAGE"
+  docker tag "$IMAGE" vibe-kanban:local
+  "$ROOT/scripts/vk-docker.sh" up -d --force-recreate
+else
+  echo "Buduję obraz lokalnie (pierwszy raz może potrwać kilka minut)..."
+  "$ROOT/scripts/vk-docker.sh" up -d --build --force-recreate
+fi
 for _ in $(seq 1 60); do
   if curl -fsS "http://localhost:${VK_PORT}/api/health" >/dev/null 2>&1; then
     echo "vibe-kanban działa: http://localhost:${VK_PORT}"
