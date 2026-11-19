@@ -1,37 +1,43 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type Project, type Task } from "./api";
 import { Field, Modal, useToast } from "./common";
+import { emptyRepo, RepoDraftRows, type RepoDraft } from "./Repos";
 import { ProjectSettings, SettingsModal } from "./Settings";
 import { TaskPage } from "./TaskPage";
 
 function NewProjectModal({ onClose, onCreated, onError }: { onClose: () => void; onCreated: (p: Project) => void; onError: (m: string) => void }) {
-  const [repo, setRepo] = useState("");
   const [name, setName] = useState("");
-  const [branch, setBranch] = useState("");
+  const [description, setDescription] = useState("");
+  const [repos, setRepos] = useState<RepoDraft[]>([emptyRepo()]);
   return (
-    <Modal title="Nowy projekt" onClose={onClose}>
+    <Modal title="Nowy projekt" onClose={onClose} wide>
       <form
         className="stack"
         onSubmit={(e) => {
           e.preventDefault();
           api
-            .post<Project>("/api/projects", { repo_path: repo, name, base_branch: branch })
+            .post<Project>("/api/projects", { name, description, repos: repos.filter((r) => r.path.trim()) })
             .then(onCreated)
-            .catch((e) => onError(e.message));
+            .catch((err) => onError(err.message));
         }}
       >
-        <Field label="Ścieżka do lokalnego repozytorium git">
-          <input autoFocus value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="/home/ja/projekty/moja-aplikacja" />
+        <Field label="Nazwa projektu">
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="np. Sklep" />
         </Field>
-        <Field label="Nazwa (opcjonalnie)">
-          <input value={name} onChange={(e) => setName(e.target.value)} />
+        <Field label="Opis (opcjonalnie)">
+          <input value={description} onChange={(e) => setDescription(e.target.value)} />
         </Field>
-        <Field label="Gałąź bazowa" hint="Domyślnie bieżąca gałąź repozytorium.">
-          <input value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" />
-        </Field>
+        <div className="field">
+          <span className="field-label">Repozytoria</span>
+          <span className="muted small">
+            Jeden projekt może mieć kilka lokalnych repozytoriów (np. frontend i backend) — jeden ticket obejmie zmiany we wszystkich. Każde podzadanie
+            dotyczy jednego repo.
+          </span>
+          <RepoDraftRows rows={repos} onChange={setRepos} />
+        </div>
         <div className="row-end">
           <button className="btn btn-primary" type="submit">
-            Dodaj projekt
+            Utwórz projekt
           </button>
         </div>
       </form>
@@ -162,6 +168,7 @@ export function App() {
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
+              {p.repos.length > 0 ? ` (${p.repos.map((r) => r.name).join(", ")})` : ""}
             </option>
           ))}
         </select>
@@ -189,7 +196,12 @@ export function App() {
               </button>
             )}
           </div>
-          {!project && <div className="muted small pad">Dodaj projekt (lokalne repozytorium git), aby zacząć.</div>}
+          {!project && <div className="muted small pad">Dodaj projekt (jedno lub kilka lokalnych repozytoriów git), aby zacząć.</div>}
+          {project && project.repos.length === 0 && (
+            <div className="muted small pad">
+              Projekt nie ma repozytoriów — dodaj je w <a href="#" onClick={(e) => (e.preventDefault(), setModal("projectSettings"))}>ustawieniach projektu</a>.
+            </div>
+          )}
           {tasks.map((t) => {
             const subs = t.subtasks ?? [];
             const done = subs.filter((s) => s.status === "done").length;
@@ -213,7 +225,7 @@ export function App() {
             <div className="empty">
               <h2>Lokalny kanban dla Claude Code</h2>
               <ol>
-                <li>Dodaj projekt (lokalne repo git) i zadanie — np. z linku do ticketu.</li>
+                <li>Dodaj projekt z jednym lub kilkoma repozytoriami (np. frontend + backend) i zadanie — np. z linku do ticketu.</li>
                 <li>Uzupełnij linki, założenia, zasoby referencyjne i ewentualnie prompty.</li>
                 <li>Skopiuj polecenie planowania do terminala — Claude rozbije zadanie na podzadania.</li>
                 <li>Zaakceptuj plan, uruchom realizację, a potem przeglądaj i komentuj w Review.</li>

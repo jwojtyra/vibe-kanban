@@ -8,9 +8,19 @@ export const SUBTASK_STATUSES: SubtaskStatus[] = ["draft", "todo", "in_progress"
 export interface Project {
   id: number;
   name: string;
-  repo_path: string;
-  base_branch: string;
+  description: string;
   assumptions: string;
+  created_at: string;
+}
+
+/** Repozytorium należące do projektu (np. frontend, backend). */
+export interface Repo {
+  id: number;
+  project_id: number;
+  name: string;
+  path: string;
+  base_branch: string;
+  description: string;
   created_at: string;
 }
 
@@ -50,6 +60,8 @@ export interface Subtask {
   problem: string;
   acceptance: string;
   status: SubtaskStatus;
+  repo_id: number | null;
+  repo: string | null; // nazwa repozytorium
   branch: string | null;
   worktree_path: string | null;
   base_ref: string | null;
@@ -126,23 +138,29 @@ export function getProject(id: number): Project {
   return p;
 }
 
-export function createProject(data: { name: string; repo_path: string; base_branch: string; assumptions?: string }): Project {
-  const r = run(
-    "INSERT INTO projects(name, repo_path, base_branch, assumptions) VALUES(?, ?, ?, ?)",
-    data.name,
-    data.repo_path,
-    data.base_branch,
-    data.assumptions ?? "",
-  );
+/** Projekt po ID albo nazwie. */
+export function findProject(ref: string | number): Project {
+  const p =
+    (typeof ref === "number" || /^\d+$/.test(String(ref)) ? get<Project>("SELECT * FROM projects WHERE id = ?", Number(ref)) : undefined) ??
+    get<Project>("SELECT * FROM projects WHERE name = ?", String(ref));
+  if (!p) throw new VkError(`Brak projektu "${ref}"`, 404);
+  return p;
+}
+
+export function createProject(data: { name: string; description?: string; assumptions?: string }): Project {
+  const name = data.name?.trim();
+  if (!name) throw new VkError("Podaj nazwę projektu");
+  if (get("SELECT 1 FROM projects WHERE name = ?", name)) throw new VkError(`Projekt "${name}" już istnieje`);
+  const r = run("INSERT INTO projects(name, description, assumptions) VALUES(?, ?, ?)", name, data.description ?? "", data.assumptions ?? "");
   return getProject(Number(r.lastInsertRowid));
 }
 
-export function updateProject(id: number, data: Partial<Pick<Project, "name" | "base_branch" | "assumptions">>) {
+export function updateProject(id: number, data: Partial<Pick<Project, "name" | "description" | "assumptions">>) {
   const p = getProject(id);
   run(
-    "UPDATE projects SET name = ?, base_branch = ?, assumptions = ? WHERE id = ?",
-    data.name ?? p.name,
-    data.base_branch ?? p.base_branch,
+    "UPDATE projects SET name = ?, description = ?, assumptions = ? WHERE id = ?",
+    data.name?.trim() || p.name,
+    data.description ?? p.description,
     data.assumptions ?? p.assumptions,
     id,
   );
@@ -152,6 +170,69 @@ export function updateProject(id: number, data: Partial<Pick<Project, "name" | "
 export function deleteProject(id: number) {
   run("DELETE FROM resources WHERE scope = 'project' AND scope_id = ?", id);
   run("DELETE FROM projects WHERE id = ?", id);
+}
+
+// ---------- repos ----------
+
+export function listRepos(projectId: number): Repo[] {
+  return all<Repo>("SELECT * FROM repos WHERE project_id = ? ORDER BY id", projectId);
+}
+
+export function getRepo(id: number): Repo {
+  const r = get<Repo>("SELECT * FROM repos WHERE id = ?", id);
+  if (!r) throw new VkError(`Brak repozytorium ${id}`, 404);
+  return r;
+}
+
+/** Repozytorium projektu po nazwie lub ID. */
+export function findRepo(projectId: number, ref: string | number): Repo {
+  const s = String(ref).trim();
+  const r =
+    get<Repo>("SELECT * FROM repos WHERE project_id = ? AND name = ?", projectId, s) ??
+    (/^\d+$/.test(s) ? get<Repo>("SELECT * FROM repos WHERE project_id = ? AND id = ?", projectId, Number(s)) : undefined);
+  if (!r) {
+    const names = listRepos(projectId).map((x) => x.name).join(", ") || "(brak)";
+    throw new VkError(`Brak repozytorium "${s}" w projekcie. Dostępne: ${names}`, 404);
+  }
+  return r;
+}
+
+export function createRepo(data: { project_id: number; name?: string; path: string; base_branch: string; description?: string }): Repo {
+  getProject(data.project_id);
+  const name = (data.name?.trim() || data.path.split("/").filter(Boolean).pop() || "repo").replace(/\s+/g, "-");
+  if (get("SELECT 1 FROM repos WHERE project_id = ? AND name = ?", data.project_id, name)) {
+    throw new VkError(`Repozytorium o nazwie "${name}" już jest w projekcie`);
+  }
+  if (get("SELECT 1 FROM repos WHERE project_id = ? AND path = ?", data.project_id, data.path)) {
+    throw new VkError(`Repozytorium ${data.path} już jest w projekcie`);
+  }
+  const r = run(
+    "INSERT INTO repos(project_id, name, path, base_branch, description) VALUES(?, ?, ?, ?, ?)",
+    data.project_id,
+    name,
+    data.path,
+    data.base_branch,
+    data.description ?? "",
+  );
+  return getRepo(Number(r.lastInsertRowid));
+}
+
+export function updateRepo(id: number, data: Partial<Pick<Repo, "name" | "base_branch" | "description">>) {
+  const r = getRepo(id);
+  run(
+    "UPDATE repos SET name = ?, base_branch = ?, description = ? WHERE id = ?",
+    data.name?.trim() || r.name,
+    data.base_branch?.trim() || r.base_branch,
+    data.description ?? r.description,
+    id,
+  );
+  return getRepo(id);
+}
+
+export function deleteRepo(id: number) {
+  const used = get<{ c: number }>("SELECT COUNT(*) AS c FROM subtasks WHERE repo_id = ? AND status NOT IN ('done', 'draft', 'todo')", id);
+  if (used && used.c > 0) throw new VkError("Repozytorium ma podzadania w trakcie lub w review — najpierw je zakończ");
+  run("DELETE FROM repos WHERE id = ?", id);
 }
 
 // ---------- tasks ----------
@@ -268,7 +349,7 @@ export function deleteTask(id: number) {
 
 // ---------- subtasks ----------
 
-type SubtaskRow = Omit<Subtask, "depends_on">;
+type SubtaskRow = Omit<Subtask, "depends_on" | "repo">;
 
 function withDeps(rows: SubtaskRow[]): Subtask[] {
   if (rows.length === 0) return [];
@@ -278,7 +359,12 @@ function withDeps(rows: SubtaskRow[]): Subtask[] {
      WHERE d.subtask_id IN (${ids.map(() => "?").join(",")}) ORDER BY s.position`,
     ...ids,
   );
-  return rows.map((r) => ({ ...r, depends_on: deps.filter((d) => d.subtask_id === r.id).map((d) => d.key) }));
+  const repoNames = new Map(all<{ id: number; name: string }>("SELECT id, name FROM repos").map((r) => [r.id, r.name]));
+  return rows.map((r) => ({
+    ...r,
+    repo: r.repo_id != null ? (repoNames.get(r.repo_id) ?? null) : null,
+    depends_on: deps.filter((d) => d.subtask_id === r.id).map((d) => d.key),
+  }));
 }
 
 export function listSubtasks(taskId: number): Subtask[] {
@@ -308,6 +394,7 @@ export function resolveSubtaskRef(taskId: number, ref: string | number): Subtask
 }
 
 export interface SubtaskInput {
+  repo?: string | number | null; // nazwa lub ID repozytorium projektu
   title?: string;
   description?: string;
   problem?: string;
@@ -341,9 +428,19 @@ function setDeps(taskId: number, subtaskId: number, refs: (string | number)[]) {
   for (const d of new Set(depIds)) run("INSERT INTO subtask_deps(subtask_id, depends_on_id) VALUES(?, ?)", subtaskId, d);
 }
 
+/** Repozytorium dla podzadania: wskazane albo jedyne w projekcie. */
+function pickRepo(projectId: number, ref: SubtaskInput["repo"]): Repo {
+  if (ref !== undefined && ref !== null && String(ref).trim() !== "") return findRepo(projectId, ref);
+  const repos = listRepos(projectId);
+  if (repos.length === 1) return repos[0];
+  if (repos.length === 0) throw new VkError("Projekt nie ma repozytoriów — dodaj repozytorium (UI, API lub vk_add_repo)");
+  throw new VkError(`Projekt ma kilka repozytoriów — wskaż repo: ${repos.map((r) => r.name).join(", ")}`);
+}
+
 export function createSubtask(taskId: number, data: SubtaskInput, status: SubtaskStatus = "draft"): Subtask {
   return tx(() => {
     const t = getTask(taskId);
+    const repo = pickRepo(t.project_id, data.repo);
     const number = t.next_number;
     const maxPos = get<{ m: number | null }>("SELECT MAX(position) AS m FROM subtasks WHERE task_id = ?", taskId)?.m ?? 0;
     const position = data.position ?? maxPos + 1;
@@ -351,8 +448,8 @@ export function createSubtask(taskId: number, data: SubtaskInput, status: Subtas
       run("UPDATE subtasks SET position = position + 1 WHERE task_id = ? AND position >= ?", taskId, position);
     }
     const r = run(
-      `INSERT INTO subtasks(task_id, key, number, position, title, description, problem, acceptance, status)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO subtasks(task_id, key, number, position, title, description, problem, acceptance, status, repo_id)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       taskId,
       `${t.key}-${number}`,
       number,
@@ -362,6 +459,7 @@ export function createSubtask(taskId: number, data: SubtaskInput, status: Subtas
       data.problem ?? "",
       data.acceptance ?? "",
       status,
+      repo.id,
     );
     run("UPDATE tasks SET next_number = next_number + 1, updated_at = datetime('now') WHERE id = ?", taskId);
     const id = Number(r.lastInsertRowid);
@@ -373,6 +471,13 @@ export function createSubtask(taskId: number, data: SubtaskInput, status: Subtas
 export function updateSubtask(id: number, data: SubtaskInput): Subtask {
   return tx(() => {
     const s = getSubtask(id);
+    if (data.repo !== undefined && data.repo !== null && String(data.repo) !== "") {
+      const repo = findRepo(getTask(s.task_id).project_id, data.repo);
+      if (repo.id !== s.repo_id) {
+        if (s.branch) throw new VkError("Nie można zmienić repozytorium podzadania, które ma już gałąź");
+        run("UPDATE subtasks SET repo_id = ? WHERE id = ?", repo.id, id);
+      }
+    }
     run(
       `UPDATE subtasks SET title = ?, description = ?, problem = ?, acceptance = ?, updated_at = datetime('now') WHERE id = ?`,
       data.title ?? s.title,
@@ -403,7 +508,7 @@ export function reorderSubtasks(taskId: number, refs: (string | number)[]) {
   });
 }
 
-export function setSubtaskFields(id: number, fields: Partial<Omit<SubtaskRow, "id" | "task_id" | "key" | "number">>) {
+export function setSubtaskFields(id: number, fields: Partial<Omit<SubtaskRow, "id" | "task_id" | "key" | "number" | "repo_id">>) {
   const keys = Object.keys(fields);
   if (keys.length === 0) return getSubtask(id);
   const sets = keys.map((k) => `${k} = ?`).join(", ");

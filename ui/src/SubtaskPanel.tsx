@@ -8,6 +8,7 @@ type Tab = "details" | "review" | "log";
 export function SubtaskPanel({
   subtaskId,
   all,
+  repos,
   onClose,
   onChanged,
   onError,
@@ -15,13 +16,14 @@ export function SubtaskPanel({
 }: {
   subtaskId: number;
   all: Subtask[];
+  repos: string[];
   onClose: () => void;
   onChanged: () => void;
   onError: (m: string) => void;
   onToast: (m: string) => void;
 }) {
   const [s, setS] = useState<Subtask | null>(null);
-  const [form, setForm] = useState<{ title: string; description: string; problem: string; acceptance: string; depends_on: string[] } | null>(null);
+  const [form, setForm] = useState<{ repo: string; title: string; description: string; problem: string; acceptance: string; depends_on: string[] } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [tab, setTab] = useState<Tab | null>(null);
   const [diff, setDiff] = useState<DiffResult | null>(null);
@@ -36,7 +38,7 @@ export function SubtaskPanel({
         .get<Subtask>(`/api/subtasks/${subtaskId}`)
         .then((x) => {
           setS(x);
-          setForm((f) => f ?? { title: x.title, description: x.description, problem: x.problem, acceptance: x.acceptance, depends_on: x.depends_on });
+          setForm((f) => f ?? { repo: x.repo ?? "", title: x.title, description: x.description, problem: x.problem, acceptance: x.acceptance, depends_on: x.depends_on });
           setTab((t) => t ?? (["review", "done", "in_progress", "blocked"].includes(x.status) ? "review" : "details"));
         })
         .catch((e) => onError(e.message)),
@@ -112,6 +114,7 @@ export function SubtaskPanel({
           <div>
             <div className="mono small muted">
               {s.key} · <span className={`status status-${s.status}`}>{STATUS_LABEL[s.status]}</span>
+              {s.repo && <> · repo <b>{s.repo}</b></>}
               {s.branch && <> · {s.branch}</>}
             </div>
             <h2>{s.title}</h2>
@@ -202,6 +205,15 @@ export function SubtaskPanel({
                 <div className="pre">{s.summary}</div>
               </div>
             )}
+            {repos.length > 1 && (
+              <Field label="Repozytorium" hint={s.branch ? "Podzadanie ma już gałąź — repozytorium nie może być zmienione." : undefined}>
+                <select disabled={!editable || !!s.branch} value={form.repo} onChange={(e) => upd({ repo: e.target.value })}>
+                  {repos.map((r) => (
+                    <option key={r}>{r}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
             <Field label="Tytuł">
               <input disabled={!editable} value={form.title} onChange={(e) => upd({ title: e.target.value })} />
             </Field>
@@ -226,7 +238,11 @@ export function SubtaskPanel({
                       checked={form.depends_on.includes(o.key)}
                       onChange={(e) => upd({ depends_on: e.target.checked ? [...form.depends_on, o.key] : form.depends_on.filter((k) => k !== o.key) })}
                     />
-                    <span className="mono small">{o.key}</span> {o.title} <span className="muted small">({STATUS_LABEL[o.status]})</span>
+                    <span className="mono small">{o.key}</span> {o.title}{" "}
+                    <span className="muted small">
+                      ({o.repo && repos.length > 1 ? `${o.repo}, ` : ""}
+                      {STATUS_LABEL[o.status]})
+                    </span>
                   </label>
                 ))}
               </div>
@@ -261,7 +277,7 @@ export function SubtaskPanel({
             {diff && (
               <div className="diff-info small">
                 <span>
-                  baza: <span className="mono">{diff.baseRef}</span>
+                  repo <b>{diff.repo}</b> · baza: <span className="mono">{diff.baseRef}</span>
                 </span>
                 {diff.uncommitted && <span className="warn">niezacommitowane zmiany w worktree</span>}
                 {diff.needsRebase && (

@@ -33,7 +33,8 @@ program
 program
   .command("exec <subtaskKey>")
   .description("Uruchamia subagenta dla jednego podzadania")
-  .action((key) => execSubtask(key).then(() => process.exit(0), fatal));
+  .option("--force", "uruchom mimo niegotowych zależności")
+  .action((key, o) => execSubtask(key, o).then(() => process.exit(0), fatal));
 
 program
   .command("open <subtaskKey>")
@@ -44,8 +45,8 @@ program
 
 program
   .command("mcp")
-  .description("Serwer MCP (stdio) dla sesji Claude Code")
-  .requiredOption("--task <key>")
+  .description("Serwer MCP (stdio). Bez --task: tryb globalny (projekty, repozytoria, zadania)")
+  .option("--task <key>")
   .option("--subtask <key>")
   .action((o) => startMcpServer(o.task, o.subtask).catch(fatal));
 

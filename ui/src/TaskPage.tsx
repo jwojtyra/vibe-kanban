@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, COLUMNS, STATUS_LABEL, type Link, type Subtask, type Task, type TaskView } from "./api";
-import { CopyCmd, Field, ResourcesEditor } from "./common";
+import { CopyCmd, Field, Modal, ResourcesEditor } from "./common";
 import { PLACEHOLDERS } from "./Settings";
 import { SubtaskPanel } from "./SubtaskPanel";
 
@@ -58,7 +58,7 @@ function LinksEditor({ links, onChange }: { links: Link[]; onChange: (l: Link[])
   );
 }
 
-function Card({ s, all, onOpen, onMove }: { s: Subtask; all: Subtask[]; onOpen: () => void; onMove?: (dir: -1 | 1) => void }) {
+function Card({ s, all, showRepo, onOpen, onMove }: { s: Subtask; all: Subtask[]; showRepo: boolean; onOpen: () => void; onMove?: (dir: -1 | 1) => void }) {
   const deps = s.depends_on.map((k) => all.find((x) => x.key === k));
   const waiting = deps.some((d) => d && !["review", "done"].includes(d.status));
   return (
@@ -78,6 +78,7 @@ function Card({ s, all, onOpen, onMove }: { s: Subtask; all: Subtask[]; onOpen: 
           </span>
         )}
       </div>
+      {showRepo && s.repo && <span className="tag tag-repo card-repo">{s.repo}</span>}
       <div className="card-title">{s.title}</div>
       {s.problem && <div className="card-problem small muted">{s.problem}</div>}
       <div className="card-meta small">
@@ -90,6 +91,38 @@ function Card({ s, all, onOpen, onMove }: { s: Subtask; all: Subtask[]; onOpen: 
         {s.error && <span className="warn">błąd</span>}
       </div>
     </div>
+  );
+}
+
+function NewSubtaskModal({ repos, onClose, onSubmit }: { repos: string[]; onClose: () => void; onSubmit: (d: { title: string; repo: string }) => void }) {
+  const [title, setTitle] = useState("");
+  const [repo, setRepo] = useState(repos[0] ?? "");
+  return (
+    <Modal title="Nowe podzadanie" onClose={onClose}>
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (title.trim()) onSubmit({ title: title.trim(), repo });
+        }}
+      >
+        <Field label="Tytuł">
+          <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} />
+        </Field>
+        <Field label="Repozytorium">
+          <select value={repo} onChange={(e) => setRepo(e.target.value)}>
+            {repos.map((r) => (
+              <option key={r}>{r}</option>
+            ))}
+          </select>
+        </Field>
+        <div className="row-end">
+          <button className="btn btn-primary" type="submit">
+            Dodaj (Draft)
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -112,6 +145,8 @@ export function TaskPage({
   const [showDetails, setShowDetails] = useState<boolean | null>(null);
   const [showPrompts, setShowPrompts] = useState(false);
   const [openSub, setOpenSub] = useState<number | null>(null);
+  const [newSub, setNewSub] = useState(false);
+  const [repoFilter, setRepoFilter] = useState<string>("");
 
   const load = useCallback(
     () =>
@@ -133,7 +168,10 @@ export function TaskPage({
   }, [load]);
 
   if (!view || !form) return <div className="pad muted">Ładowanie…</div>;
-  const { task, subtasks, commands } = view;
+  const { task, commands } = view;
+  const repoNames = view.project.repos.map((r) => r.name);
+  const multiRepo = repoNames.length > 1;
+  const subtasks = repoFilter ? view.subtasks.filter((s) => s.repo === repoFilter) : view.subtasks;
   const drafts = subtasks.filter((s) => s.status === "draft");
   const todo = subtasks.filter((s) => s.status === "todo");
   const upd = (patch: Partial<Form>) => {
@@ -154,7 +192,7 @@ export function TaskPage({
       .catch((e) => onError(e.message));
 
   const move = (s: Subtask, dir: -1 | 1) => {
-    const order = subtasks.map((x) => x.key);
+    const order = view.subtasks.map((x) => x.key);
     const i = order.indexOf(s.key);
     const j = i + dir;
     if (j < 0 || j >= order.length) return;
@@ -162,17 +200,15 @@ export function TaskPage({
     api.post<TaskView>(`/api/tasks/${taskId}/reorder`, { order }).then(setView).catch((e) => onError(e.message));
   };
 
-  const addSubtask = () => {
-    const title = prompt("Tytuł podzadania");
-    if (!title) return;
+  const addSubtask = (d: { title: string; repo: string }) =>
     api
-      .post<Subtask>(`/api/tasks/${taskId}/subtasks`, { title })
+      .post<Subtask>(`/api/tasks/${taskId}/subtasks`, d)
       .then((s) => {
+        setNewSub(false);
         load();
         setOpenSub(s.id);
       })
       .catch((e) => onError(e.message));
-  };
 
   return (
     <div className="task-page">
@@ -180,6 +216,7 @@ export function TaskPage({
         <div>
           <div className="mono muted small">
             {task.key} · gałąź {view.task_branch}
+            {view.task_repos.length > 0 && <> w: {view.task_repos.map((r) => r.name).join(", ")}</>}
             {task.ticket_url && (
               <>
                 {" · "}
@@ -294,7 +331,7 @@ export function TaskPage({
               >
                 Akceptuj plan ({drafts.length})
               </button>
-              <button className="btn btn-small" onClick={addSubtask}>
+              <button className="btn btn-small" disabled={repoNames.length === 0} onClick={() => setNewSub(true)}>
                 + Podzadanie ręcznie
               </button>
             </div>
@@ -310,6 +347,18 @@ export function TaskPage({
         </div>
       </section>
 
+      {multiRepo && (
+        <div className="repo-filter">
+          <span className="muted small">Repozytorium:</span>
+          {["", ...repoNames].map((r) => (
+            <button key={r || "all"} className={`chip ${repoFilter === r ? "active" : ""}`} onClick={() => setRepoFilter(r)}>
+              {r || "wszystkie"}
+              <span className="muted"> {r ? view.subtasks.filter((s) => s.repo === r).length : view.subtasks.length}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       <section className="board">
         {COLUMNS.filter((c) => c !== "blocked" || subtasks.some((s) => s.status === "blocked")).map((col) => {
           const items = subtasks.filter((s) => s.status === col);
@@ -320,7 +369,7 @@ export function TaskPage({
               </div>
               <div className="column-body">
                 {items.map((s) => (
-                  <Card key={s.id} s={s} all={subtasks} onOpen={() => setOpenSub(s.id)} onMove={["draft", "todo"].includes(s.status) ? (d) => move(s, d) : undefined} />
+                  <Card key={s.id} s={s} all={view.subtasks} showRepo={multiRepo} onOpen={() => setOpenSub(s.id)} onMove={["draft", "todo"].includes(s.status) ? (d) => move(s, d) : undefined} />
                 ))}
               </div>
             </div>
@@ -328,11 +377,14 @@ export function TaskPage({
         })}
       </section>
 
+      {newSub && <NewSubtaskModal repos={repoNames} onClose={() => setNewSub(false)} onSubmit={addSubtask} />}
+
       {openSub != null && (
         <SubtaskPanel
           key={openSub}
           subtaskId={openSub}
-          all={subtasks}
+          all={view.subtasks}
+          repos={repoNames}
           onClose={() => setOpenSub(null)}
           onChanged={() => {
             load();

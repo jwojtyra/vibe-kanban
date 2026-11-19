@@ -822,3 +822,68 @@ textarea:disabled {
   background: var(--danger);
   color: #fff;
 }
+
+/* repozytoria */
+.repos {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.repo-draft,
+.repo-edit {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.repo-draft input,
+.repo-edit input {
+  width: auto;
+  flex: 1 1 150px;
+}
+.repo-draft input.grow {
+  flex: 2 1 240px;
+}
+.repo-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.tag-repo {
+  background: var(--surface);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-family: ui-monospace, monospace;
+}
+.card-repo {
+  display: inline-block;
+  margin-top: 4px;
+}
+.repo-filter {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.chip {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 3px 11px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+}
+.chip.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.chip.active .muted {
+  color: var(--accent-text);
+  opacity: 0.8;
+}

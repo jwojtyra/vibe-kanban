@@ -4,11 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { addDirArgs, mcpConfig, promptTemplate, readonlySettings, renderPrompt, resolveResources, sessionSystemPrompt } from "./context.js";
-import { commitAll, ensureTaskWorktree, hasChanges, prepareSubtaskWorktree, taskWorktreePath } from "./git.js";
+import { commitAll, ensureTaskWorktree, hasChanges, prepareSubtaskWorktree, subtaskRepo, taskWorktreePath } from "./git.js";
 import { cliPath, subdir } from "./paths.js";
 import {
-  getProject,
   getSettings,
+  listRepos,
   getSubtask,
   getSubtaskByKey,
   getTask,
@@ -39,14 +39,23 @@ function splitCommand(cmd: string): string[] {
 function runInteractive(args: string[], cwd: string): Promise<number> {
   const [bin, ...pre] = splitCommand(getSettings().claude_command || "claude");
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, [...pre, ...args], { cwd, stdio: "inherit" });
+    const child = spawn(bin, [...pre, ...args], { cwd, stdio: "inherit", env: claudeEnv() });
     child.on("error", (e) => reject(new VkError(`Nie udało się uruchomić "${bin}": ${e.message}`)));
     child.on("exit", (code) => resolve(code ?? 0));
   });
 }
 
+/** Ładuj też CLAUDE.md z katalogów dodanych przez --add-dir (repozytoria projektu). */
+function claudeEnv() {
+  return { ...process.env, CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" };
+}
+
 function commonArgs(kind: "plan" | "impl" | "review", task: Task, sub?: Subtask) {
   const res = resolveResources(task, true);
+  // pozostałe repozytoria projektu: przy planowaniu do wglądu, przy pracy nad podzadaniem tylko do odczytu
+  const repos = listRepos(task.project_id).filter((r) => r.id !== sub?.repo_id);
+  const repoDirs = repos.map((r) => r.path);
+  const readonly = kind === "plan" ? res : [...res, ...repos.map((r) => ({ name: r.name, scope: "repo", kind: "path", location: r.path, local_path: r.path, note: "" }))];
   return {
     res,
     args: [
@@ -55,23 +64,30 @@ function commonArgs(kind: "plan" | "impl" | "review", task: Task, sub?: Subtask)
       "--mcp-config",
       mcpConfig(cliPath(), task.key, sub?.key),
       "--settings",
-      readonlySettings(res),
-      ...addDirArgs(res),
+      readonlySettings(readonly),
+      ...addDirArgs([...res, ...repoDirs.map((p) => ({ name: "", scope: "repo", kind: "path", location: p, local_path: p, note: "" }))]),
     ],
   };
+}
+
+/** Stały katalog roboczy sesji planowania (niezależny od liczby repozytoriów — sesja da się zawsze wznowić). */
+function planDir(task: Task) {
+  return subdir("plan", task.key);
 }
 
 /** vk plan KEY — stała, wznawialna sesja planowania w repozytorium projektu. */
 export async function planSession(taskKey: string): Promise<number> {
   const task = getTaskByKey(taskKey);
-  const project = getProject(task.project_id);
+  if (listRepos(task.project_id).length === 0) throw new VkError("Projekt nie ma repozytoriów — dodaj je w UI (Ustawienia projektu) lub przez MCP");
+  const cwd = planDir(task);
   const { res, args } = commonArgs("plan", task);
   const resume = sessionExists(task.plan_session_id);
   const head = resume
     ? ["--resume", task.plan_session_id]
     : [renderPrompt(promptTemplate(task, "plan"), task, undefined, res), "--session-id", task.plan_session_id];
-  console.error(`[vk] ${resume ? "Wznawiam" : "Rozpoczynam"} sesję planowania ${task.key} (${task.plan_session_id}) w ${project.repo_path}`);
-  return runInteractive([...head, "-n", `vk plan ${task.key}`, ...args], project.repo_path);
+  console.error(`[vk] ${resume ? "Wznawiam" : "Rozpoczynam"} sesję planowania ${task.key} (${task.plan_session_id})`);
+  console.error(`[vk] Repozytoria: ${listRepos(task.project_id).map((r) => `${r.name} (${r.path})`).join(", ")}`);
+  return runInteractive([...head, "-n", `vk plan ${task.key}`, ...args], cwd);
 }
 
 /**
@@ -83,7 +99,7 @@ export async function openSession(subKey: string, opts: { agent?: boolean; fresh
   const task = getTask(sub.task_id);
   let cwd: string;
   if (sub.status === "done" || ["draft", "todo"].includes(sub.status)) {
-    cwd = ensureTaskWorktree(task);
+    cwd = ensureTaskWorktree(task, subtaskRepo(sub));
   } else {
     sub = prepareSubtaskWorktree(sub.id);
     cwd = sub.worktree_path!;
@@ -143,11 +159,15 @@ function printEvent(prefix: string, line: string) {
 }
 
 /** vk exec SUBKEY — uruchamia subagenta (claude -p) dla jednego podzadania. */
-export async function execSubtask(subKey: string): Promise<Subtask> {
+export async function execSubtask(subKey: string, opts: { force?: boolean } = {}): Promise<Subtask> {
   let sub = getSubtaskByKey(subKey);
   const task = getTask(sub.task_id);
   if (!["todo", "blocked", "in_progress"].includes(sub.status)) {
     throw new VkError(`Podzadanie ${sub.key} ma status ${sub.status} — można uruchomić tylko todo/blocked`);
+  }
+  const notReady = listSubtasks(task.id).filter((s) => sub.depends_on.includes(s.key) && !["review", "done"].includes(s.status));
+  if (notReady.length && !opts.force) {
+    throw new VkError(`Zależności nie są gotowe: ${notReady.map((s) => `${s.key} (${s.status})`).join(", ")}. Użyj --force, aby uruchomić mimo to.`);
   }
   sub = prepareSubtaskWorktree(sub.id);
   const settings = getSettings();
@@ -180,7 +200,7 @@ export async function execSubtask(subKey: string): Promise<Subtask> {
   console.log(`${prefix} start — worktree ${sub.worktree_path}, sesja ${sessionId}`);
   const log = fs.createWriteStream(logPath);
   const code: number = await new Promise((resolve) => {
-    const child = spawn(bin, fullArgs, { cwd: sub.worktree_path!, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, fullArgs, { cwd: sub.worktree_path!, stdio: ["ignore", "pipe", "pipe"], env: claudeEnv() });
     let buf = "";
     child.stdout.on("data", (d: Buffer) => {
       log.write(d);
@@ -232,7 +252,6 @@ export async function runTask(taskKey: string, opts: { concurrency?: number } = 
   if (listSubtasks(task.id).some((s) => s.status === "draft")) {
     console.log(`[vk] Uwaga: część podzadań jest w Draft (niezaakceptowana) — zostaną pominięte.`);
   }
-  ensureTaskWorktree(task);
   const limit = Math.max(1, opts.concurrency ?? (Number(getSettings().concurrency) || 1));
   const running = new Map<number, Promise<void>>();
   const failed = new Set<number>();
@@ -266,4 +285,3 @@ export async function runTask(taskKey: string, opts: { concurrency?: number } = 
   }
 }
 
-export { taskWorktreePath };

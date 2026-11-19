@@ -18,8 +18,10 @@ gdzie człowiek ogląda diff, komentuje i akceptuje.
 ## Pojęcia
 
 ### Projekt
-Lokalne repozytorium git (`repo_path`) + gałąź bazowa (`base_branch`) + założenia projektu
-+ zasoby referencyjne projektu.
+Grupa lokalnych repozytoriów git (np. `frontend`, `backend`). Każde ma nazwę, ścieżkę,
+gałąź bazową i opis. Do tego założenia projektu i zasoby referencyjne projektu.
+Jedno zadanie (ticket) może obejmować zmiany we wszystkich repozytoriach projektu.
+Projekty i repozytoria można tworzyć w UI, przez API HTTP i przez MCP (tryb globalny `vk mcp`).
 
 ### Zasoby referencyjne (read-only)
 Lokalna ścieżka albo URL repozytorium git (klonowane do `~/.vk/cache`).
@@ -46,6 +48,7 @@ Domyślne są globalne (Ustawienia), zadanie może je nadpisać.
 
 ### Podzadanie
 - klucz `<KLUCZ_ZADANIA>-<n>` (np. `PROJ-123-2`),
+- **repozytorium** projektu, którego dotyczy (dokładnie jedno),
 - tytuł, opis, **jaki problem rozwiązuje**, kryteria akceptacji,
 - pozycja (kolejność) i zależności,
 - status: `draft → todo → in_progress → review → done` (+ `blocked`),
@@ -71,10 +74,14 @@ Domyślne są globalne (Ustawienia), zadanie może je nadpisać.
 
 ## Git
 
-- Gałąź zadania: `vk/<KLUCZ>` (z `base_branch`), worktree w `~/.vk/worktrees/<projekt>/<KLUCZ>`.
-- Gałąź podzadania: `vk/<KLUCZ>-<n>`, osobny worktree.
-- Baza podzadania: gałąź zadania; jeżeli zależność nie jest jeszcze `done` — gałąź
-  tej zależności (stacked). Po `done` zależności baza przełącza się na gałąź zadania.
+- Gałąź zadania: `vk/<KLUCZ>` w każdym repo, którego dotyczą podzadania (z `base_branch` tego repo),
+  worktree w `~/.vk/worktrees/<projekt>/<repo>/<KLUCZ>`.
+- Gałąź podzadania: `vk/<KLUCZ>-<n>` w repo podzadania, osobny worktree.
+- Baza podzadania: gałąź zadania w jego repo; jeżeli zależność z TEGO SAMEGO repo nie jest
+  jeszcze `done` — gałąź tej zależności (stacked). Zależności z innych repo wpływają tylko
+  na kolejność. Po `done` zależności baza przełącza się na gałąź zadania.
+- Sesja implementacji/review: zapis tylko w worktree podzadania; pozostałe repozytoria
+  projektu dostępne tylko do odczytu.
 - Diff do review: `merge-base(baza, HEAD)` → drzewo robocze (+ pliki nieśledzone).
 - Jeżeli baza poszła do przodu (np. poprawki w zależności), UI pokazuje „wymaga rebase”
   i przycisk Rebase (przy konflikcie — abort, rozwiązanie w sesji).

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Project } from "./api";
 import { Field, Modal, ResourcesEditor } from "./common";
+import { ReposEditor } from "./Repos";
 
 export const PLACEHOLDERS =
   "{{task.key}} {{task.title}} {{task.description}} {{task.ticket_id}} {{task.ticket_url}} {{task.assumptions}} {{task.links}} {{project.name}} {{project.assumptions}} {{resources}} {{subtask.key}} {{subtask.title}} {{subtask.description}} {{subtask.problem}} {{subtask.acceptance}} {{subtask.deps}} {{comments}}";
@@ -112,12 +113,11 @@ export function ProjectSettings({
   return (
     <Modal title={`Projekt: ${project.name}`} onClose={onClose} wide>
       <div className="stack">
-        <div className="muted small mono">{project.repo_path}</div>
         <Field label="Nazwa">
           <input value={p.name} onChange={(e) => setP({ ...p, name: e.target.value })} />
         </Field>
-        <Field label="Gałąź bazowa">
-          <input className="mono" value={p.base_branch} onChange={(e) => setP({ ...p, base_branch: e.target.value })} />
+        <Field label="Opis">
+          <input value={p.description} onChange={(e) => setP({ ...p, description: e.target.value })} />
         </Field>
         <Field label="Założenia projektu" hint="Trafiają do każdej sesji (planowanie, implementacja, review).">
           <textarea rows={6} value={p.assumptions} onChange={(e) => setP({ ...p, assumptions: e.target.value })} />
@@ -126,17 +126,27 @@ export function ProjectSettings({
           <button
             className="btn btn-danger btn-ghost"
             onClick={() => {
-              if (confirm(`Usunąć projekt ${project.name} z narzędzia? (repozytorium i gałęzie zostają)`))
+              if (confirm(`Usunąć projekt ${project.name} z narzędzia? (repozytoria i gałęzie zostają na dysku)`))
                 api.del(`/api/projects/${project.id}`).then(onDeleted).catch((e) => onError(e.message));
             }}
           >
             Usuń projekt
           </button>
           <div className="grow" />
-          <button className="btn btn-primary" onClick={() => api.put(`/api/projects/${project.id}`, p).then(onSaved).catch((e) => onError(e.message))}>
+          <button
+            className="btn btn-primary"
+            onClick={() =>
+              api
+                .put(`/api/projects/${project.id}`, { name: p.name, description: p.description, assumptions: p.assumptions })
+                .then(onSaved)
+                .catch((e) => onError(e.message))
+            }
+          >
             Zapisz
           </button>
         </div>
+        <h3>Repozytoria</h3>
+        <ReposEditor projectId={project.id} repos={project.repos} onChanged={onSaved} onError={onError} />
         <h3>Zasoby referencyjne projektu (tylko do odczytu)</h3>
         <ResourcesEditor scope="project" scopeId={project.id} onError={onError} />
       </div>

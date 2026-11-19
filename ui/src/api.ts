@@ -1,11 +1,20 @@
 export type SubtaskStatus = "draft" | "todo" | "in_progress" | "review" | "done" | "blocked";
 
+export interface Repo {
+  id: number;
+  project_id: number;
+  name: string;
+  path: string;
+  base_branch: string;
+  description: string;
+}
+
 export interface Project {
   id: number;
   name: string;
-  repo_path: string;
-  base_branch: string;
+  description: string;
   assumptions: string;
+  repos: Repo[];
 }
 
 export interface Link {
@@ -42,6 +51,8 @@ export interface Subtask {
   problem: string;
   acceptance: string;
   status: SubtaskStatus;
+  repo_id: number | null;
+  repo: string | null;
   branch: string | null;
   worktree_path: string | null;
   base_ref: string | null;
@@ -82,10 +93,11 @@ export interface TaskView {
   resources: Resource[];
   commands: { plan: string; run: string; plan_session_started: boolean };
   task_branch: string;
-  task_worktree: string;
+  task_repos: { name: string; worktree: string }[];
 }
 
 export interface DiffResult {
+  repo: string;
   base: string;
   baseRef: string;
   diff: string;

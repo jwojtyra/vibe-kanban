@@ -2,18 +2,19 @@ import express, { type NextFunction, type Request, type Response } from "express
 import fs from "node:fs";
 import path from "node:path";
 import { commentView, subtaskContext } from "../core/context.js";
-import { currentBranch, isGitRepo, mergeSubtask, rebaseSubtask, removeSubtaskWorktree, subtaskDiff, taskBranch, taskWorktreePath } from "../core/git.js";
+import { mergeSubtask, rebaseSubtask, removeSubtaskWorktree, subtaskDiff, taskBranch, taskRepos, taskWorktreePath } from "../core/git.js";
+import { addRepo, createProjectWithRepos, projectView } from "../core/projects.js";
 import { uiDistPath } from "../core/paths.js";
 import { sessionExists } from "../core/sessions.js";
 import {
   acceptPlan,
   createComment,
-  createProject,
   createResource,
   createSubtask,
   createTask,
   deleteComment,
   deleteProject,
+  deleteRepo,
   deleteResource,
   deleteSubtask,
   deleteTask,
@@ -24,6 +25,7 @@ import {
   getTask,
   listComments,
   listProjects,
+  listRepos,
   listResources,
   listSubtasks,
   listTasks,
@@ -34,6 +36,7 @@ import {
   type Task,
   updateComment,
   updateProject,
+  updateRepo,
   updateSettings,
   updateSubtask,
   updateTask,
@@ -79,12 +82,12 @@ function taskView(tid: number) {
   const task = getTask(tid);
   return {
     task,
-    project: getProject(task.project_id),
+    project: projectView(getProject(task.project_id)),
     subtasks: listSubtasks(tid).map((s) => subtaskView(s.id)),
     resources: listResources("task", tid),
     commands: commands(task),
     task_branch: taskBranch(task),
-    task_worktree: taskWorktreePath(task),
+    task_repos: taskRepos(task).map((r) => ({ name: r.name, worktree: taskWorktreePath(task, r) })),
   };
 }
 
@@ -130,22 +133,18 @@ export function createApp() {
   app.put("/api/settings", h((req) => (updateSettings(req.body ?? {}), getSettings())));
 
   // projects
-  app.get("/api/projects", h(() => listProjects()));
-  app.post(
-    "/api/projects",
-    h((req) => {
-      const repo = path.resolve(String(req.body.repo_path ?? "").replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
-      if (!isGitRepo(repo)) throw new VkError(`${repo} nie jest repozytorium git`);
-      return createProject({
-        name: req.body.name || path.basename(repo),
-        repo_path: repo,
-        base_branch: req.body.base_branch || currentBranch(repo),
-        assumptions: req.body.assumptions,
-      });
-    }),
-  );
-  app.put("/api/projects/:id", h((req) => updateProject(id(req), req.body)));
+  app.get("/api/projects", h(() => listProjects().map(projectView)));
+  // body: { name, description?, assumptions?, repos?: [{ path, name?, base_branch?, description? }] }
+  app.post("/api/projects", h((req) => createProjectWithRepos(req.body ?? {})));
+  app.get("/api/projects/:id", h((req) => projectView(getProject(id(req)))));
+  app.put("/api/projects/:id", h((req) => projectView(updateProject(id(req), req.body))));
   app.delete("/api/projects/:id", h((req) => deleteProject(id(req))));
+
+  // repos
+  app.get("/api/projects/:id/repos", h((req) => listRepos(id(req))));
+  app.post("/api/projects/:id/repos", h((req) => addRepo(id(req), req.body ?? {})));
+  app.put("/api/repos/:id", h((req) => updateRepo(id(req), req.body ?? {})));
+  app.delete("/api/repos/:id", h((req) => deleteRepo(id(req))));
 
   // tasks
   app.get("/api/projects/:id/tasks", h((req) => listTasks(id(req)).map((t) => ({ ...t, subtasks: listSubtasks(t.id).map((s) => ({ key: s.key, status: s.status })) }))));

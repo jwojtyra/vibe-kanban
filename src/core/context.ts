@@ -6,6 +6,7 @@ import {
   effectiveResources,
   getProject,
   getSettings,
+  listRepos,
   listComments,
   listSubtasks,
   type Comment,
@@ -56,18 +57,30 @@ export function taskContext(task: Task) {
       project: project.assumptions,
       task: task.assumptions,
     },
-    project: { name: project.name, repo_path: project.repo_path, base_branch: project.base_branch },
+    project: { name: project.name, description: project.description || undefined },
+    repositories: reposContext(task),
     task_branch: taskBranch(task),
-    task_worktree: taskWorktreePath(task),
     resources_readonly: resolveResources(task, false),
     status: task.status,
     subtasks: subs.map(subtaskSummary),
   };
 }
 
+/** Repozytoria projektu: ścieżka, gałąź bazowa, gałąź i worktree zadania w danym repo. */
+export function reposContext(task: Task) {
+  return listRepos(task.project_id).map((r) => ({
+    name: r.name,
+    path: r.path,
+    base_branch: r.base_branch,
+    description: r.description || undefined,
+    task_worktree: taskWorktreePath(task, r),
+  }));
+}
+
 export function subtaskSummary(s: Subtask) {
   return {
     key: s.key,
+    repo: s.repo,
     position: s.position,
     title: s.title,
     status: s.status,
@@ -112,6 +125,14 @@ export function promptTemplate(task: Task, kind: PromptKind): string {
   return own ?? getSettings()[`${kind}_prompt`];
 }
 
+function reposText(task: Task) {
+  return (
+    listRepos(task.project_id)
+      .map((r) => `- ${r.name}: ${r.path} (baza ${r.base_branch})${r.description ? ` — ${r.description}` : ""}`)
+      .join("\n") || "(brak)"
+  );
+}
+
 function linksText(task: Task) {
   return task.links.map((l) => `- ${l.url}${l.note ? ` — ${l.note}` : ""}`).join("\n") || "(brak)";
 }
@@ -144,6 +165,7 @@ export function renderPrompt(tpl: string, task: Task, sub?: Subtask, res?: Resol
     "task.assumptions": task.assumptions || "(brak)",
     "task.links": linksText(task),
     "project.name": project.name,
+    repos: reposText(task),
     "project.assumptions": project.assumptions || "(brak)",
     resources: resourcesText(res ?? resolveResources(task, false)),
   };
@@ -176,11 +198,17 @@ export function sessionSystemPrompt(kind: PromptKind, task: Task, res: ResolvedR
     "",
     `Zadanie główne: ${task.key} — ${task.title}`,
     task.ticket_url ? `Ticket: ${task.ticket_id} (${task.ticket_url})` : "",
-    `Projekt: ${project.name} (${project.repo_path}), gałąź bazowa: ${project.base_branch}`,
-    sub ? `Podzadanie: ${sub.key} — ${sub.title}; gałąź ${sub.branch}; baza ${sub.base_ref}` : "",
+    `Projekt: ${project.name}${project.description ? ` — ${project.description}` : ""}`,
+    sub ? `Podzadanie: ${sub.key} — ${sub.title}; repozytorium ${sub.repo}; gałąź ${sub.branch}; baza ${sub.base_ref}` : "",
     "",
     "Masz serwer MCP `vibe-kanban` (narzędzia vk_*) z pełnym kontekstem zadania, podzadań i komentarzy z review.",
     "Zawsze korzystaj z vk_get_task, gdy potrzebujesz opisu, założeń, linków lub zasobów.",
+    "",
+    "## Repozytoria projektu",
+    kind === "plan"
+      ? "Zadanie może wymagać zmian w kilku repozytoriach. Każde podzadanie dotyczy JEDNEGO repo (parametr repo w vk_create_subtask). Zależności między repo wyrażaj przez depends_on."
+      : `Pracujesz w repozytorium ${sub?.repo}. Pozostałe repozytoria projektu są dostępne TYLKO DO ODCZYTU (np. żeby sprawdzić kontrakt API).`,
+    reposText(task),
     "",
     "## Założenia projektu",
     project.assumptions || "(brak)",
