@@ -6,7 +6,7 @@ import { vkHome } from "./paths.js";
 let db: DatabaseSync | null = null;
 
 /** Wersja schematu. Starsze bazy (bez zgodnej wersji) są odkładane jako kopia zapasowa. */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS items (
   review_session_id TEXT,
   summary TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT '',
+  blocker TEXT NOT NULL DEFAULT '',        -- powód zablokowania (pusty = brak)
   log_path TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -82,6 +83,22 @@ CREATE TABLE IF NOT EXISTS item_deps (
   item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   depends_on_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
   PRIMARY KEY (item_id, depends_on_id)
+);
+
+-- pytania agenta do człowieka (przy elemencie planu albo przy całym tickecie)
+CREATE TABLE IF NOT EXISTS questions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+  question TEXT NOT NULL,
+  options TEXT NOT NULL DEFAULT '[]',      -- propozycje odpowiedzi (JSON)
+  blocking INTEGER NOT NULL DEFAULT 0,     -- 1 = bez odpowiedzi nie da się realizować
+  status TEXT NOT NULL DEFAULT 'open',     -- open | answered | closed
+  answer_choice TEXT,                      -- wybrana propozycja (NULL = odpowiedź własna)
+  answer_text TEXT NOT NULL DEFAULT '',    -- odpowiedź własna / uwagi
+  note TEXT NOT NULL DEFAULT '',           -- notatka agenta przy zamknięciu
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  answered_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS resources (
@@ -120,7 +137,13 @@ export function getDb(): DatabaseSync {
   let d = open(file);
   const version = (d.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
   const hasTables = (d.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type = 'table'").get() as { c: number }).c > 0;
-  if (hasTables && version !== SCHEMA_VERSION) {
+  // migracje zgodnych wersji
+  if (hasTables && version === 3) {
+    const cols = (d.prepare("PRAGMA table_info(items)").all() as { name: string }[]).map((c) => c.name);
+    if (!cols.includes("blocker")) d.exec("ALTER TABLE items ADD COLUMN blocker TEXT NOT NULL DEFAULT ''");
+    d.exec(SCHEMA); // tworzy tabelę questions
+    d.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  } else if (hasTables && version !== SCHEMA_VERSION) {
     // niezgodna (starsza) baza — odkładamy ją i zaczynamy od nowa
     d.close();
     const backup = `${file}.v${version || 1}-${Date.now()}.bak`;

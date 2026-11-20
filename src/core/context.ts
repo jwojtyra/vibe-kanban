@@ -12,8 +12,10 @@ import {
   LEVEL_NAME,
   listComments,
   listItems,
+  listQuestions,
   listTaskRepos,
   type Comment,
+  type Question,
   type Item,
   type Task,
 } from "./repo.js";
@@ -74,8 +76,51 @@ export function reposContext(task: Task) {
   }));
 }
 
+export function guidelinesText(): string {
+  const s = getSettings();
+  return (s.guidelines || s.assumptions || "").trim();
+}
+
+export function levelsText(levels: number[] = [1, 2, 3]): string {
+  const s = getSettings();
+  const map: Record<number, [string, string]> = { 1: ["Etap", s.level_stage], 2: ["Funkcja", s.level_feature], 3: ["Krok", s.level_step] };
+  return levels
+    .map((l) => `### ${map[l][0]}\n${(map[l][1] || "(brak)").trim()}`)
+    .join("\n\n");
+}
+
+export function questionView(q: Question) {
+  return {
+    id: q.id,
+    item: q.item_key ?? "ticket",
+    question: q.question,
+    options: q.options,
+    blocking: q.blocking || undefined,
+    status: q.status,
+    answer: q.status === "answered" ? (q.answer_choice ?? null) : undefined,
+    answer_comment: q.answer_text || undefined,
+    note: q.note || undefined,
+  };
+}
+
+function questionsText(qs: Question[]): string {
+  if (!qs.length) return "(brak)";
+  return qs
+    .map((q) => {
+      const ans =
+        q.status === "answered"
+          ? ` → odpowiedź: ${q.answer_choice ?? "(własna)"}${q.answer_text ? ` — ${q.answer_text}` : ""}`
+          : q.status === "open"
+            ? " → czeka na odpowiedź"
+            : " → zamknięte";
+      return `- #${q.id} [${q.item_key ?? "ticket"}]${q.blocking ? " (blokujące)" : ""} ${q.question}${ans}`;
+    })
+    .join("\n");
+}
+
 /** Zwięzły widok elementu planu. */
-export function itemSummary(items: Item[], i: Item) {
+export function itemSummary(items: Item[], i: Item, questions?: Question[]) {
+  const qs = (questions ?? listQuestions(i.task_id)).filter((q) => q.item_id === i.id && q.status === "open");
   return {
     key: i.key,
     type: LEVEL_NAME[i.level],
@@ -87,6 +132,8 @@ export function itemSummary(items: Item[], i: Item) {
     problem: i.problem || undefined,
     [i.level === LEVEL.FEATURE ? "acceptance_tests" : "acceptance"]: i.acceptance || undefined,
     summary: i.summary || undefined,
+    blocker: i.blocker || undefined,
+    open_questions: qs.length || undefined,
   };
 }
 
@@ -95,9 +142,10 @@ type TreeNode = ReturnType<typeof itemSummary> & { children?: TreeNode[] };
 /** Plan w postaci drzewa Etap → Funkcja → Krok. */
 export function planTree(task: Task): TreeNode[] {
   const items = listItems(task.id);
+  const questions = listQuestions(task.id);
   const node = (i: Item): TreeNode => {
     const ch = childrenOf(items, i.id);
-    return { ...itemSummary(items, i), ...(ch.length ? { children: ch.map(node) } : {}) };
+    return { ...itemSummary(items, i, questions), ...(ch.length ? { children: ch.map(node) } : {}) };
   };
   return childrenOf(items, null).map(node);
 }
@@ -109,11 +157,13 @@ export function taskContext(task: Task) {
     description: task.description,
     ticket: task.ticket_url ? { id: task.ticket_id, url: task.ticket_url } : null,
     links: task.links,
-    assumptions: { global: getSettings().assumptions || undefined, task: task.assumptions || undefined },
+    guidelines: guidelinesText() || undefined,
+    assumptions: task.assumptions || undefined,
     repositories: reposContext(task),
     task_branch: taskBranch(task),
     resources_readonly: resolveResources(task, false),
     status: task.status,
+    questions: listQuestions(task.id).filter((q) => q.status !== "closed").map(questionView),
     plan: planTree(task),
   };
 }
@@ -132,6 +182,7 @@ export function itemContext(item: Item) {
     ...itemSummary(items, item),
     parents,
     children: childrenOf(items, item.id).map((c) => itemSummary(items, c)),
+    questions: listQuestions(item.task_id, { itemId: item.id }).map(questionView),
     ...(item.level === LEVEL.STEP
       ? {
           branch: item.branch,
@@ -208,7 +259,13 @@ export function renderPrompt(tpl: string, task: Task, step?: Item, res?: Resolve
     "task.ticket_url": task.ticket_url || "(brak)",
     "task.assumptions": task.assumptions || "(brak)",
     "task.links": linksText(task),
-    assumptions: getSettings().assumptions || "(brak)",
+    assumptions: guidelinesText() || "(brak)",
+    guidelines: guidelinesText() || "(brak)",
+    levels: levelsText(),
+    "level.stage": getSettings().level_stage || "(brak)",
+    "level.feature": getSettings().level_feature || "(brak)",
+    "level.step": getSettings().level_step || "(brak)",
+    questions: questionsText(listQuestions(task.id).filter((q) => q.status !== "closed")),
     repos: reposText(task),
     resources: resourcesText(res ?? resolveResources(task, false)),
   };
@@ -233,6 +290,7 @@ export function renderPrompt(tpl: string, task: Task, step?: Item, res?: Resolve
       "stage.key": stage?.key ?? "",
       "stage.title": stage?.title ?? "",
       comments: commentsText(listComments(step.id, false)),
+      questions: questionsText(listQuestions(task.id).filter((q) => q.status !== "closed" && (q.item_id === null || [step.id, feature?.id, stage?.id].includes(q.item_id)))),
     });
   }
   return tpl.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (m, k: string) => (k in vars ? vars[k] : m));
@@ -246,7 +304,7 @@ export function sessionSystemPrompt(kind: PromptKind, task: Task, res: ResolvedR
       : kind === "impl"
         ? `To jest sesja IMPLEMENTACJI Kroku ${step?.key} uruchomiona automatycznie (subagent). Pracujesz w worktree Kroku.`
         : `To jest sesja pracy nad Krokiem ${step?.key} (review / poprawki) w jego worktree.`;
-  const globalAssumptions = getSettings().assumptions;
+  const guidelines = guidelinesText();
   return [
     "# vibe-kanban",
     role,
@@ -261,8 +319,12 @@ export function sessionSystemPrompt(kind: PromptKind, task: Task, res: ResolvedR
       ? "Każdy Krok dotyczy JEDNEGO repo (parametr repo w vk_create_step). Funkcja może mieć Kroki w kilku repo."
       : `Pracujesz w repozytorium ${step?.repo}. Pozostałe repozytoria ticketu są dostępne TYLKO DO ODCZYTU.`,
     reposText(task),
-    "## Założenia globalne",
-    globalAssumptions || "(brak)",
+    "## Wytyczne techniczne (obowiązują zawsze)",
+    guidelines || "(brak)",
+    "## Jak definiować poziomy",
+    kind === "plan" ? levelsText() : levelsText([2, 3]),
+    "## Pytania i blokery",
+    "Gdy potrzebujesz decyzji człowieka — nie zgaduj: vk_ask_question (z 2–4 propozycjami odpowiedzi; blocking=true, gdy bez odpowiedzi nie da się zrealizować elementu). Człowiek odpowiada w UI; odpowiedzi: vk_list_questions. Odpowiedź własna może oznaczać, że chce omówić temat na czacie albo ma dodatkowe pytania — wtedy zapytaj go bezpośrednio. Obsłużone pytania zamykaj vk_close_question. Element, którego nie da się teraz realizować, oznacz vk_set_blocker.",
     "## Założenia ticketu",
     task.assumptions || "(brak)",
     "## Linki do wykorzystania",

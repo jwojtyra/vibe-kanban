@@ -7,6 +7,7 @@ import { gitCacheDir, mcpConfig, promptTemplate, readonlySettings, renderPrompt,
 import { commitAll, ensureGitResource, ensureTaskWorktree, hasChanges, prepareStepWorktree, stepRepo } from "./git.js";
 import { cliPath, subdir } from "./paths.js";
 import {
+  blockReasons,
   effectiveDeps,
   effectiveResources,
   getItemByKey,
@@ -16,6 +17,7 @@ import {
   LEVEL,
   LEVEL_NAME,
   listItems,
+  listQuestions,
   listSteps,
   listTaskRepos,
   runnableSteps,
@@ -173,6 +175,10 @@ export function startStep(stepKey: string, opts: { force?: boolean } = {}): Step
   if (notReady.length && !opts.force) {
     throw new VkError(`Zależności nie są gotowe: ${notReady.map((s) => `${s.key} (${s.status})`).join(", ")}. Użyj force, aby uruchomić mimo to.`);
   }
+  const blocked = blockReasons(items, items.find((i) => i.id === sub.id)!, listQuestions(task.id));
+  if (blocked.length && !opts.force) {
+    throw new VkError(`Krok jest zablokowany: ${blocked.join("; ")}. Odpowiedz na pytania / usuń bloker w UI albo użyj force.`);
+  }
   sub = prepareStepWorktree(sub.id);
   const settings = getSettings();
   const sessionId = randomUUID();
@@ -250,8 +256,12 @@ export function runSummary(taskKey: string): string[] {
   if (left.length) {
     const items = listItems(task.id);
     out.push(
-      `Czekają (zależności niegotowe lub plan niezaakceptowany): ${left
-        .map((s) => `${s.key} ← ${effectiveDeps(items, s).filter((d) => !["review", "done"].includes(d.status)).map((d) => d.key).join(", ") || "Draft"}`)
+      `Czekają: ${left
+        .map((s) => {
+          const why = blockReasons(items, s, listQuestions(task.id));
+          if (why.length) return `${s.key} ← zablokowany (${why.length}: pytania/blokery — sprawdź UI)`;
+          return `${s.key} ← ${effectiveDeps(items, s).filter((d) => !["review", "done"].includes(d.status)).map((d) => d.key).join(", ") || "Draft"}`;
+        })
         .join("; ")}`,
     );
   }

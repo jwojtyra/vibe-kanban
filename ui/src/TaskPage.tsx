@@ -1,63 +1,118 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, COLUMNS, LEVEL_NAME, shortKey, STATUS_LABEL, type Item, type Link, type Repo, type Task, type TaskView } from "./api";
-import { CopyCmd, Field, Modal, ResourcesEditor } from "./common";
+import { clip, CopyCmd, EditTile, Field, Modal, ResourcesEditor, TextModal } from "./common";
 import { ItemPanel } from "./ItemPanel";
+import { QuestionsModal } from "./Questions";
 import { RepoPicker } from "./Repos";
 import { PLACEHOLDERS } from "./Settings";
 
-type Form = Pick<Task, "title" | "description" | "ticket_url" | "assumptions" | "links"> & {
-  plan_prompt: string;
-  impl_prompt: string;
-  review_prompt: string;
-};
-
-const toForm = (t: Task): Form => ({
-  title: t.title,
-  description: t.description,
-  ticket_url: t.ticket_url,
-  assumptions: t.assumptions,
-  links: t.links,
-  plan_prompt: t.plan_prompt ?? "",
-  impl_prompt: t.impl_prompt ?? "",
-  review_prompt: t.review_prompt ?? "",
-});
-
-function LinksEditor({ links, onChange }: { links: Link[]; onChange: (l: Link[]) => void }) {
+/** Okno linków dla agenta: lista + dodawanie. */
+function LinksModal({ links, onSave, onClose }: { links: Link[]; onSave: (l: Link[]) => Promise<unknown>; onClose: () => void }) {
+  const [list, setList] = useState(links);
   const [url, setUrl] = useState("");
   const [note, setNote] = useState("");
+  const add = () => {
+    if (!url.trim()) return;
+    setList([...list, { url: url.trim(), note: note.trim() || undefined }]);
+    setUrl("");
+    setNote("");
+  };
   return (
-    <div className="links">
-      {links.map((l, i) => (
-        <div key={i} className="resource-row">
-          <div className="grow">
-            <a href={l.url} target="_blank" rel="noreferrer" className="mono small">
-              {l.url}
-            </a>
-            {l.note && <div className="muted small">{l.note}</div>}
+    <Modal title="Linki, z których ma korzystać agent" onClose={onClose} wide>
+      <div className="links">
+        {list.length === 0 && <div className="muted small">Brak linków.</div>}
+        {list.map((l, i) => (
+          <div key={i} className="resource-row">
+            <div className="grow">
+              <a href={l.url} target="_blank" rel="noreferrer" className="mono small">
+                {l.url}
+              </a>
+              {l.note && <div className="muted small">{l.note}</div>}
+            </div>
+            <button className="btn btn-ghost btn-small" onClick={() => setList(list.filter((_, j) => j !== i))}>
+              Usuń
+            </button>
           </div>
-          <button className="btn btn-ghost btn-small" onClick={() => onChange(links.filter((_, j) => j !== i))}>
-            Usuń
+        ))}
+      </div>
+      <form
+        className="repo-add"
+        onSubmit={(e) => {
+          e.preventDefault();
+          add();
+        }}
+      >
+        <div className="field-label">Nowy link</div>
+        <div className="repo-draft">
+          <input className="grow" placeholder="https://… (dokumentacja, design, konwersacja…)" value={url} onChange={(e) => setUrl(e.target.value)} />
+          <input placeholder="Do czego służy (opcjonalnie)" value={note} onChange={(e) => setNote(e.target.value)} />
+          <button className="btn btn-small" type="submit">
+            Dodaj do listy
           </button>
         </div>
-      ))}
-      <div className="resource-add">
-        <input className="grow" placeholder="https://… (dokumentacja, design, konwersacja…)" value={url} onChange={(e) => setUrl(e.target.value)} />
-        <input placeholder="Do czego służy (opcjonalnie)" value={note} onChange={(e) => setNote(e.target.value)} />
+      </form>
+      <div className="row-end">
+        <button className="btn btn-ghost" onClick={onClose}>
+          Anuluj
+        </button>
         <button
-          className="btn btn-small"
+          className="btn btn-primary"
           onClick={() => {
-            if (!url.trim()) return;
-            onChange([...links, { url: url.trim(), note: note.trim() || undefined }]);
-            setUrl("");
-            setNote("");
+            const final = url.trim() ? [...list, { url: url.trim(), note: note.trim() || undefined }] : list;
+            onSave(final).then(onClose);
           }}
         >
-          Dodaj
+          Zapisz
         </button>
       </div>
-    </div>
+    </Modal>
   );
 }
+
+function TitleModal({ task, onSave, onClose }: { task: Task; onSave: (p: Partial<Task>) => Promise<unknown>; onClose: () => void }) {
+  const [title, setTitle] = useState(task.title);
+  const [url, setUrl] = useState(task.ticket_url);
+  return (
+    <Modal title="Tytuł i link do ticketu" onClose={onClose}>
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSave({ title, ticket_url: url }).then(onClose);
+        }}
+      >
+        <Field label="Tytuł">
+          <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} />
+        </Field>
+        <Field label="Link do ticketu" hint="ID wyciągane automatycznie z linku (klucz ticketu się nie zmienia).">
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…/browse/PROJ-123" />
+        </Field>
+        <div className="row-end">
+          <button type="submit" className="btn btn-primary">
+            Zapisz
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function AttnBadges({ it }: { it: Item }) {
+  const inherited = it.attention !== "blocker" && it.block_reasons.length > 0;
+  return (
+    <>
+      {it.blocker && <span className="badge badge-danger" title={it.blocker}>⛔ bloker</span>}
+      {it.open_questions > 0 && <span className={`badge ${it.attention === "blocker" ? "badge-danger" : "badge-warn"}`}>❓ {it.open_questions}</span>}
+      {inherited && (
+        <span className="badge badge-danger" title={it.block_reasons.join("\n")}>
+          ⛔ zablokowany wyżej
+        </span>
+      )}
+    </>
+  );
+}
+
+const attnClass = (it: Item) => (it.attention === "blocker" ? "attn-blocker" : it.attention === "question" ? "attn-question" : "");
 
 function NewItemModal({
   level,
@@ -156,7 +211,7 @@ function PlanTree({
         const children = items.filter((c) => c.parent_id === it.id);
         const done = it.level < 3 ? items.filter((s) => s.level === 3 && s.key.startsWith(`${it.key}.`)) : [];
         return (
-          <div key={it.id} className={`plan-row plan-l${it.level}`} onClick={() => onOpen(it.id)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpen(it.id)}>
+          <div key={it.id} className={`plan-row plan-l${it.level} ${attnClass(it)}`} onClick={() => onOpen(it.id)} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpen(it.id)}>
             <span className={`level level-${it.level}`}>{LEVEL_NAME[it.level]}</span>
             <span className="mono small muted plan-key">{shortKey(taskKey, it.key)}</span>
             <span className="plan-title">
@@ -175,6 +230,7 @@ function PlanTree({
               </span>
             )}
             {it.open_comments > 0 && <span className="badge">{it.open_comments} kom.</span>}
+            <AttnBadges it={it} />
             <StatusPill s={it.display_status} />
             <span className="plan-actions" onClick={(e) => e.stopPropagation()}>
               {it.level < 3 && (
@@ -209,7 +265,7 @@ function PlanTree({
 function StepCard({ s, items, taskKey, showRepo, onOpen }: { s: Item; items: Item[]; taskKey: string; showRepo: boolean; onOpen: () => void }) {
   const feature = items.find((i) => i.id === s.parent_id);
   return (
-    <div className={`card card-${s.status}`} onClick={onOpen} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpen()}>
+    <div className={`card card-${s.status} ${attnClass(s) || (s.block_reasons.length ? "attn-blocker" : "")}`} onClick={onOpen} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && onOpen()}>
       <div className="card-top">
         <span className="mono small muted">{shortKey(taskKey, s.key)}</span>
         <span className={`kind kind-${s.kind}`}>{s.kind === "test" ? "testy" : "impl"}</span>
@@ -220,6 +276,7 @@ function StepCard({ s, items, taskKey, showRepo, onOpen }: { s: Item; items: Ite
         {showRepo && s.repo && <span className="tag tag-repo">{s.repo}</span>}
         {s.depends_on.length > 0 && <span className="muted">⤷ {s.depends_on.map((k) => shortKey(taskKey, k)).join(", ")}</span>}
         {s.open_comments > 0 && <span className="badge">{s.open_comments} kom.</span>}
+        <AttnBadges it={s} />
         {s.error && <span className="warn">błąd</span>}
       </div>
     </div>
@@ -244,10 +301,10 @@ export function TaskPage({
   onDeleted: () => void;
 }) {
   const [view, setView] = useState<TaskView | null>(null);
-  const [form, setForm] = useState<Form | null>(null);
-  const [dirty, setDirty] = useState(false);
+  const [edit, setEdit] = useState<string | null>(null);
+  const [resCount, setResCount] = useState(0);
+  const [showQuestions, setShowQuestions] = useState(false);
   const [showDetails, setShowDetails] = useState<boolean | null>(null);
-  const [showPrompts, setShowPrompts] = useState(false);
   const [openItem, setOpenItem] = useState<number | null>(null);
   const [newItem, setNewItem] = useState<{ level: 1 | 2 | 3; parent: Item | null } | null>(null);
   const [mode, setMode] = useState<"plan" | "board">("plan");
@@ -260,7 +317,6 @@ export function TaskPage({
         .get<TaskView>(`/api/tasks/${taskId}`)
         .then((v) => {
           setView(v);
-          setForm((f) => f ?? toForm(v.task));
           setShowDetails((d) => (d === null ? v.items.length === 0 : d));
         })
         .catch((e) => onError(e.message)),
@@ -273,7 +329,7 @@ export function TaskPage({
     return () => clearInterval(t);
   }, [load]);
 
-  if (!view || !form) return <div className="pad muted">Ładowanie…</div>;
+  if (!view) return <div className="pad muted">Ładowanie…</div>;
   const { task, commands, items } = view;
   const repoNames = view.repos.map((r) => r.name);
   const steps = items.filter((i) => i.level === 3);
@@ -284,21 +340,25 @@ export function TaskPage({
     (s) => (!repoFilter || s.repo === repoFilter) && (!featureFilter || items.find((i) => i.id === s.parent_id)?.key === featureFilter),
   );
 
-  const upd = (patch: Partial<Form>) => {
-    setForm({ ...form, ...patch });
-    setDirty(true);
-  };
-  const save = () =>
+  const saveTask = (patch: Partial<Task>) =>
     api
-      .put<TaskView>(`/api/tasks/${taskId}`, form)
+      .put<TaskView>(`/api/tasks/${taskId}`, patch)
       .then((v) => {
         setView(v);
-        setForm(toForm(v.task));
-        setDirty(false);
         onChanged();
         onToast("Zapisano ticket");
       })
-      .catch((e) => onError(e.message));
+      .catch((e) => {
+        onError(e.message);
+        throw e;
+      });
+  const openQs = view.questions.filter((q) => q.status === "open");
+  const blockingQs = openQs.filter((q) => q.blocking);
+  const ticketPrompts: [keyof Task, string][] = [
+    ["plan_prompt", "Prompt planowania"],
+    ["impl_prompt", "Prompt implementacji Kroku"],
+    ["review_prompt", "Prompt review Kroku"],
+  ];
   const toggleRepo = (name: string, on: boolean) => {
     const repo = allRepos.find((r) => r.name === name);
     if (!repo) return;
@@ -369,60 +429,54 @@ export function TaskPage({
 
       {showDetails && (
         <section className="panel">
-          <div className="grid2">
-            <div className="stack">
-              <Field label="Tytuł">
-                <input value={form.title} onChange={(e) => upd({ title: e.target.value })} />
-              </Field>
-              <Field label="Link do ticketu" hint={task.ticket_id ? `ID: ${task.ticket_id}` : "ID wyciągane automatycznie z linku"}>
-                <input value={form.ticket_url} onChange={(e) => upd({ ticket_url: e.target.value })} placeholder="https://…/browse/PROJ-123" />
-              </Field>
-              <Field label="Opis">
-                <textarea rows={6} value={form.description} onChange={(e) => upd({ description: e.target.value })} />
-              </Field>
-              <Field label="Własne założenia" hint="Np. ograniczenia, decyzje architektoniczne, czego nie ruszać. Założenia globalne są w Ustawieniach.">
-                <textarea rows={5} value={form.assumptions} onChange={(e) => upd({ assumptions: e.target.value })} />
-              </Field>
-            </div>
-            <div className="stack">
-              <div className="field">
-                <span className="field-label">Linki, z których ma korzystać agent</span>
-                <LinksEditor links={form.links} onChange={(links) => upd({ links })} />
-              </div>
-              <div className="field">
-                <span className="field-label">Zasoby referencyjne ticketu (tylko do odczytu)</span>
-                <span className="muted small">Dodatkowo do sesji trafiają zasoby globalne.</span>
-                <ResourcesEditor scope="task" scopeId={task.id} onError={onError} />
-              </div>
-              <button className="btn btn-ghost btn-small align-start" onClick={() => setShowPrompts(!showPrompts)}>
-                {showPrompts ? "▾" : "▸"} Prompty tego ticketu {task.plan_prompt || task.impl_prompt || task.review_prompt ? "(nadpisane)" : "(domyślne)"}
-              </button>
-            </div>
+          <div className="tiles">
+            <EditTile label="Tytuł i link do ticketu" filled summary={`${task.title}${task.ticket_url ? ` · ${task.ticket_id || task.ticket_url}` : ""}`} onClick={() => setEdit("title")} />
+            <EditTile label="Opis" filled={!!task.description.trim()} summary={clip(task.description)} onClick={() => setEdit("description")} />
+            <EditTile
+              label="Założenia ticketu"
+              filled={!!task.assumptions.trim()}
+              summary={clip(task.assumptions)}
+              onClick={() => setEdit("assumptions")}
+            />
+            <EditTile
+              label="Linki dla agenta"
+              filled={task.links.length > 0}
+              summary={task.links.map((l) => l.note || l.url).join(" · ")}
+              onClick={() => setEdit("links")}
+            />
+            <EditTile
+              label="Zasoby referencyjne (tylko do odczytu)"
+              filled={resCount > 0}
+              summary={`${resCount} zasob(y/ów); dodatkowo zasoby globalne`}
+              onClick={() => setEdit("resources")}
+            />
+            {ticketPrompts.map(([k, label]) => (
+              <EditTile
+                key={k}
+                label={`${label} (dla tego ticketu)`}
+                filled={!!task[k]}
+                addLabel="Nadpisz"
+                summary={clip(String(task[k] ?? ""))}
+                onClick={() => setEdit(k)}
+              />
+            ))}
           </div>
-          {showPrompts && (
-            <div className="stack">
-              <p className="muted small">Puste pole = prompt domyślny z Ustawień. Placeholdery: {PLACEHOLDERS}</p>
-              <Field label="Prompt planowania">
-                <textarea rows={8} className="mono" value={form.plan_prompt} onChange={(e) => upd({ plan_prompt: e.target.value })} />
-              </Field>
-              <Field label="Prompt implementacji Kroku">
-                <textarea rows={8} className="mono" value={form.impl_prompt} onChange={(e) => upd({ impl_prompt: e.target.value })} />
-              </Field>
-              <Field label="Prompt review Kroku">
-                <textarea rows={6} className="mono" value={form.review_prompt} onChange={(e) => upd({ review_prompt: e.target.value })} />
-              </Field>
-            </div>
-          )}
-          <div className="row-end">
-            {dirty && <span className="muted small">Niezapisane zmiany</span>}
-            <button className="btn btn-ghost" disabled={!dirty} onClick={() => (setForm(toForm(task)), setDirty(false))}>
-              Odrzuć
-            </button>
-            <button className="btn btn-primary" disabled={!dirty} onClick={save}>
-              Zapisz
-            </button>
+          <div style={{ display: "none" }}>
+            <ResourcesEditor scope="task" scopeId={task.id} onError={onError} onChanged={setResCount} />
           </div>
         </section>
+      )}
+
+      {openQs.length > 0 && (
+        <div className={`attn-banner ${blockingQs.length ? "attn-blocker" : "attn-question"}`}>
+          <span>
+            ❓ {openQs.length} {openQs.length === 1 ? "pytanie czeka" : "pytania czekają"} na odpowiedź
+            {blockingQs.length > 0 && <b> · {blockingQs.length} blokujące</b>}
+          </span>
+          <button className="btn btn-small btn-primary" onClick={() => setShowQuestions(true)}>
+            Odpowiedz
+          </button>
+        </div>
       )}
 
       <section className="steps">
@@ -518,6 +572,60 @@ export function TaskPage({
         </section>
       )}
 
+      {edit === "title" && <TitleModal task={task} onSave={saveTask} onClose={() => setEdit(null)} />}
+      {edit === "description" && (
+        <TextModal title="Opis ticketu" value={task.description} onSave={(v) => saveTask({ description: v })} onClose={() => setEdit(null)} />
+      )}
+      {edit === "assumptions" && (
+        <TextModal
+          title="Założenia ticketu"
+          value={task.assumptions}
+          hint="Ograniczenia, decyzje architektoniczne, czego nie ruszać — tylko dla tego ticketu. Ogólne zasady trzymaj w „Wytycznych”."
+          onSave={(v) => saveTask({ assumptions: v })}
+          onClose={() => setEdit(null)}
+        />
+      )}
+      {edit === "links" && <LinksModal links={task.links} onSave={(links) => saveTask({ links })} onClose={() => setEdit(null)} />}
+      {edit === "resources" && (
+        <Modal title="Zasoby referencyjne ticketu" onClose={() => setEdit(null)} wide>
+          <p className="muted small">Tylko do odczytu. Do sesji trafiają też zasoby globalne (Ustawienia).</p>
+          <ResourcesEditor scope="task" scopeId={task.id} onError={onError} onChanged={setResCount} />
+        </Modal>
+      )}
+      {ticketPrompts.map(([k, label]) =>
+        edit === k ? (
+          <TextModal
+            key={k}
+            title={`${label} — nadpisanie dla ${task.key}`}
+            value={String(task[k] ?? "")}
+            mono
+            rows={16}
+            hint={<>Puste = prompt domyślny z Ustawień. Placeholdery: {PLACEHOLDERS}</>}
+            resetLabel="Użyj domyślnego"
+            onReset={() => saveTask({ [k]: "" } as Partial<Task>).then(() => setEdit(null))}
+            onSave={(v) => saveTask({ [k]: v } as Partial<Task>)}
+            onClose={() => setEdit(null)}
+          />
+        ) : null,
+      )}
+      {showQuestions && (
+        <QuestionsModal
+          taskKey={task.key}
+          questions={view.questions}
+          items={items}
+          onOpenItem={(id) => {
+            setShowQuestions(false);
+            setOpenItem(id);
+          }}
+          onChanged={() => {
+            load();
+            onChanged();
+          }}
+          onError={onError}
+          onClose={() => setShowQuestions(false)}
+        />
+      )}
+
       {newItem && (
         <NewItemModal
           level={newItem.level}
@@ -534,6 +642,7 @@ export function TaskPage({
           taskKey={task.key}
           all={items}
           repos={repoNames}
+          questions={view.questions}
           onOpen={setOpenItem}
           onAddChild={(p) => setNewItem({ level: (p.level + 1) as 2 | 3, parent: p })}
           onClose={() => setOpenItem(null)}

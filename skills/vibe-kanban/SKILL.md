@@ -39,6 +39,19 @@ Zasady dobrego planu:
   Draft — człowiek akceptuje je w UI.
 - Klucze można podawać skrótem (`1.2`) w obrębie ticketu.
 
+## Pytania, blokery, wytyczne
+
+- **Pytania do człowieka**: zamiast zgadywać — `vk_ask_question` (przy ticketcie albo elemencie planu)
+  z 2–4 propozycjami odpowiedzi; `blocking: true`, gdy bez odpowiedzi elementu nie da się zrealizować.
+  Człowiek odpowiada w UI (radio z propozycjami albo własna odpowiedź). Odpowiedzi: `vk_list_questions`;
+  własna odpowiedź może znaczyć „omówmy na czacie” / „mam dodatkowe pytania” — wtedy dopytaj wprost.
+  Obsłużone pytania zamykaj `vk_close_question`.
+- **Bloker**: `vk_set_blocker` z powodem, gdy elementu nie da się teraz realizować (pusty powód usuwa).
+  Zablokowane elementy są w UI czerwone, z otwartymi pytaniami — żółte; ich Kroki nie ruszą.
+- **Wytyczne** (`vk_get_guidelines`): wymagania techniczne użytkownika — obowiązują zawsze.
+  Dopisuj (`vk_add_guideline`) tylko na wyraźną prośbę („zapisz w wytycznych, że…”).
+- **Prompty poziomów** (Ustawienia) opisują, jak definiować Etap, Funkcję i Krok — są w kontekście sesji.
+
 ## W sesji Kroku (implementacja / review)
 
 - Kontekst: `vk_get_item` (Krok, jego Funkcja i Etap, komentarze), `vk_get_task` (ticket i plan).

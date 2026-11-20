@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, LEVEL_NAME, shortKey, STATUS_LABEL, type Comment, type DiffResult, type Item, type ItemStatus } from "./api";
-import { CopyCmd, Field } from "./common";
+import { api, LEVEL_NAME, shortKey, STATUS_LABEL, type Comment, type DiffResult, type Item, type ItemStatus, type Question } from "./api";
+import { CopyCmd, Field, Modal, TextModal } from "./common";
+import { QuestionCard } from "./Questions";
 import { DiffView, InlineComment } from "./DiffView";
 
 type Tab = "details" | "review" | "log";
@@ -16,11 +17,21 @@ interface Form {
 }
 
 /** Panel boczny elementu planu: Etap, Funkcja albo Krok (z diffem, komentarzami i logiem). */
+function ReadField({ label, value, warnIfEmpty }: { label: string; value: string; warnIfEmpty?: boolean }) {
+  return (
+    <div className="read-field">
+      <div className="field-label">{label}</div>
+      {value.trim() ? <div className="pre">{value}</div> : <div className={warnIfEmpty ? "warn small" : "muted small"}>{warnIfEmpty ? "brak — uzupełnij" : "—"}</div>}
+    </div>
+  );
+}
+
 export function ItemPanel({
   itemId,
   taskKey,
   all,
   repos,
+  questions,
   onOpen,
   onAddChild,
   onClose,
@@ -32,6 +43,7 @@ export function ItemPanel({
   taskKey: string;
   all: Item[];
   repos: string[];
+  questions: Question[];
   onOpen: (id: number) => void;
   onAddChild: (parent: Item) => void;
   onClose: () => void;
@@ -48,6 +60,8 @@ export function ItemPanel({
   const [log, setLog] = useState<{ kind: string; text: string }[]>([]);
   const [general, setGeneral] = useState("");
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [blockerEdit, setBlockerEdit] = useState(false);
 
   const load = useCallback(
     () =>
@@ -130,6 +144,7 @@ export function ItemPanel({
   const children = all.filter((x) => x.parent_id === it.id);
   const parents: Item[] = [];
   for (let p = all.find((x) => x.id === it.parent_id); p; p = all.find((x) => x.id === p!.parent_id)) parents.unshift(p);
+  const ownQs = questions.filter((q) => q.item_id === it.id);
   const generalComments = comments.filter((c) => !c.file);
   const fileComments = comments.filter((c) => c.file);
 
@@ -167,6 +182,29 @@ export function ItemPanel({
         </div>
 
         {it.error && <div className="alert">{it.error}</div>}
+        {it.blocker && (
+          <div className="alert alert-blocker">
+            <div className="grow">
+              <b>⛔ Bloker:</b> {it.blocker}
+            </div>
+            <button className="btn btn-small" onClick={() => setBlockerEdit(true)}>
+              Edytuj
+            </button>
+            <button className="btn btn-small" onClick={() => api.post(`/api/items/${it.id}/blocker`, { reason: "" }).then(() => (load(), onChanged()))}>
+              Usuń bloker
+            </button>
+          </div>
+        )}
+        {isStep && !it.blocker && it.block_reasons.length > 0 && (
+          <div className="alert alert-blocker">
+            <b>Krok nie ruszy, dopóki nie usuniesz blokad:</b>
+            <ul>
+              {it.block_reasons.map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="drawer-actions">
           {it.status === "draft" && (
@@ -197,6 +235,11 @@ export function ItemPanel({
           {isStep && it.status === "in_progress" && (
             <button className="btn btn-small btn-ghost" disabled={busy} onClick={() => setStatus("blocked")} title="Gdy proces subagenta został przerwany">
               Oznacz jako Blocked
+            </button>
+          )}
+          {!it.blocker && it.display_status !== "done" && (
+            <button className="btn btn-small btn-ghost" onClick={() => setBlockerEdit(true)}>
+              Oznacz bloker
             </button>
           )}
           {!isStep && (
@@ -254,6 +297,60 @@ export function ItemPanel({
                 <div className="pre">{it.summary}</div>
               </div>
             )}
+
+            {(ownQs.length > 0 || it.level > 0) && (
+              <div className="field">
+                <div className="row">
+                  <span className="field-label grow">Pytania agenta {ownQs.filter((q) => q.status === "open").length > 0 && `(${ownQs.filter((q) => q.status === "open").length} otwarte)`}</span>
+                </div>
+                {ownQs.length === 0 && <span className="muted small">Brak pytań przy tym elemencie.</span>}
+                {ownQs.map((q) => (
+                  <QuestionCard key={q.id} q={q} onChanged={onChanged} onError={onError} />
+                ))}
+              </div>
+            )}
+
+            <div className="readonly-fields">
+              <div className="row">
+                <span className="field-label grow">Szczegóły</span>
+                <button className="btn btn-small" onClick={() => setEditing(true)}>
+                  {editable ? "Edytuj" : "Pokaż wszystko"}
+                </button>
+              </div>
+              {isStep && (
+                <div className="muted small">
+                  repo <b>{it.repo}</b> · {it.kind === "test" ? "testy (czerwone)" : "implementacja"}
+                </div>
+              )}
+              <ReadField label={it.level === 2 ? "Opis zmiany funkcjonalnej" : "Opis"} value={it.description} />
+              {!isStep && <ReadField label="Jaki problem rozwiązuje" value={it.problem} />}
+              {it.level !== 1 && <ReadField label={it.level === 2 ? "Testy akceptacyjne" : "Kryteria akceptacji"} value={it.acceptance} warnIfEmpty={it.level === 2} />}
+              <ReadField label="Zależy od" value={it.depends_on.map((k) => sk(k)).join(", ")} />
+            </div>
+
+            {!isStep && (
+              <div className="field">
+                <span className="field-label">{it.level === 1 ? "Funkcje" : "Kroki"}</span>
+                {children.length === 0 && <span className="muted small">Brak — dodaj przyciskiem „+ {LEVEL_NAME[it.level + 1]}” lub w sesji planowania.</span>}
+                {children.map((c) => (
+                  <button key={c.id} className="child-row" onClick={() => onOpen(c.id)}>
+                    <span className="mono small muted">{sk(c.key)}</span>
+                    <span className="grow">{c.title}</span>
+                    {c.repo && <span className="tag tag-repo">{c.repo}</span>}
+                    {c.level === 3 && <span className={`kind kind-${c.kind}`}>{c.kind === "test" ? "testy" : "impl"}</span>}
+                    <span className={`status status-${c.display_status} small`}>{STATUS_LABEL[c.display_status]}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {it.worktree_path && <div className="muted small mono">worktree: {it.worktree_path}</div>}
+          </div>
+        )}
+
+        {editing && (
+          <Modal title={`${LEVEL_NAME[it.level]} ${sk(it.key)} — ${editable ? "edycja" : "szczegóły"}`} onClose={() => setEditing(false)} wide>
+            <div className="stack">
+              {!editable && <div className="muted small">Element jest w realizacji — edycja jest zablokowana.</div>}
             {isStep && (
               <div className="grid2">
                 <Field label="Repozytorium" hint={it.branch ? "Krok ma już gałąź — repozytorium nie może być zmienione." : undefined}>
@@ -312,17 +409,18 @@ export function ItemPanel({
                 ))}
               </div>
             </div>
-            {editable && (
+            {(
               <div className="row-end">
                 <button
                   className="btn btn-primary"
-                  disabled={!dirty}
+                  disabled={!dirty || !editable}
                   onClick={() =>
                     api
                       .put<Item>(`/api/items/${it.id}`, isStep ? form : { ...form, repo: undefined, kind: undefined })
                       .then((x) => {
                         setIt({ ...it, ...x });
                         setDirty(false);
+                        setEditing(false);
                         onChanged();
                         onToast("Zapisano");
                       })
@@ -333,23 +431,20 @@ export function ItemPanel({
                 </button>
               </div>
             )}
-            {!isStep && (
-              <div className="field">
-                <span className="field-label">{it.level === 1 ? "Funkcje" : "Kroki"}</span>
-                {children.length === 0 && <span className="muted small">Brak — dodaj przyciskiem „+ {LEVEL_NAME[it.level + 1]}” lub w sesji planowania.</span>}
-                {children.map((c) => (
-                  <button key={c.id} className="child-row" onClick={() => onOpen(c.id)}>
-                    <span className="mono small muted">{sk(c.key)}</span>
-                    <span className="grow">{c.title}</span>
-                    {c.repo && <span className="tag tag-repo">{c.repo}</span>}
-                    {c.level === 3 && <span className={`kind kind-${c.kind}`}>{c.kind === "test" ? "testy" : "impl"}</span>}
-                    <span className={`status status-${c.display_status} small`}>{STATUS_LABEL[c.display_status]}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            {it.worktree_path && <div className="muted small mono">worktree: {it.worktree_path}</div>}
-          </div>
+            </div>
+          </Modal>
+        )}
+
+        {blockerEdit && (
+          <TextModal
+            title={`Bloker: ${it.title}`}
+            value={it.blocker}
+            rows={4}
+            allowEmpty={false}
+            hint="Dlaczego tego elementu nie da się teraz realizować? Kroki (także podrzędne) nie ruszą, dopóki bloker nie zostanie usunięty."
+            onSave={(v) => api.post(`/api/items/${it.id}/blocker`, { reason: v }).then(() => (load(), onChanged()))}
+            onClose={() => setBlockerEdit(false)}
+          />
         )}
 
         {isStep && tab === "review" && (
