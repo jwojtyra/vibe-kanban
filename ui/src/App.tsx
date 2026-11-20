@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type Repo, type Task, type TaskView } from "./api";
 import { Field, Modal, useToast } from "./common";
 import { RepoPicker, ReposModal } from "./Repos";
-import { SettingsModal } from "./Settings";
+import { GuidelinesModal, SettingsModal } from "./Settings";
 import { TaskPage } from "./TaskPage";
 
 function NewTaskModal({
@@ -83,7 +83,7 @@ export function App() {
       return null;
     }
   });
-  const [modal, setModal] = useState<"task" | "settings" | "repos" | null>(null);
+  const [modal, setModal] = useState<"task" | "settings" | "repos" | "guidelines" | null>(null);
   const [reposReturn, setReposReturn] = useState(false);
 
   const loadRepos = useCallback(() => api.get<Repo[]>("/api/repos").then(setRepos).catch((e) => onError(e.message)), [onError]);
@@ -110,6 +110,9 @@ export function App() {
       <header className="topbar">
         <div className="brand">vibe-kanban</div>
         <div className="grow" />
+        <button className="btn btn-small btn-ghost" onClick={() => setModal("guidelines")}>
+          Wytyczne
+        </button>
         <button className="btn btn-small btn-ghost" onClick={() => setModal("repos")}>
           Repozytoria ({repos.length})
         </button>
@@ -132,13 +135,23 @@ export function App() {
             const done = steps.filter((s) => s.status === "done").length;
             const review = steps.filter((s) => s.status === "review").length;
             return (
-              <button key={t.id} className={`task-item ${t.id === taskId ? "active" : ""}`} onClick={() => setTaskId(t.id)}>
+              <button
+                key={t.id}
+                className={`task-item ${t.id === taskId ? "active" : ""} ${t.blockers ? "attn-blocker" : t.open_questions ? "attn-question" : ""}`}
+                onClick={() => setTaskId(t.id)}
+              >
                 <div className="task-item-key mono">{t.key}</div>
                 <div className="task-item-title">{t.title}</div>
                 <div className="muted small">
                   {steps.length ? `${done}/${steps.length} kroków done` : "bez planu"}
                   {review ? ` · ${review} w review` : ""}
                 </div>
+                {(t.open_questions || t.blockers) ? (
+                  <div className="small task-item-attn">
+                    {t.open_questions ? <span>❓ {t.open_questions} pyt.</span> : null}
+                    {t.blockers ? <span className="danger"> ⛔ {t.blockers} bloker(y)</span> : null}
+                  </div>
+                ) : null}
                 {t.repos && t.repos.length > 0 && (
                   <div className="task-item-repos">
                     {t.repos.map((r) => (
@@ -211,6 +224,7 @@ export function App() {
           onError={onError}
         />
       )}
+      {modal === "guidelines" && <GuidelinesModal onClose={() => setModal(null)} onError={onError} onSaved={() => toast.show("Zapisano wytyczne")} />}
       {modal === "settings" && <SettingsModal onClose={() => setModal(null)} onError={onError} onSaved={() => toast.show("Zapisano ustawienia")} />}
       {toast.node}
     </div>

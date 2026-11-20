@@ -80,24 +80,130 @@ export function Field({ label, children, hint }: { label: string; children: Reac
   );
 }
 
-/** Lista zasobów referencyjnych (tylko do odczytu) dla danego zakresu. */
+/** Kafelek pola: etykieta, skrót zawartości i przycisk „Dodaj” / „Edytuj” otwierający okno. */
+export function EditTile({
+  label,
+  filled,
+  summary,
+  onClick,
+  addLabel = "Dodaj",
+  tone,
+}: {
+  label: string;
+  filled: boolean;
+  summary?: ReactNode;
+  onClick: () => void;
+  addLabel?: string;
+  tone?: "warn";
+}) {
+  return (
+    <div className={`tile ${filled ? "tile-filled" : "tile-empty"} ${tone ? `tile-${tone}` : ""}`}>
+      <div className="grow">
+        <div className="tile-label">{label}</div>
+        {filled && summary && <div className="tile-summary">{summary}</div>}
+      </div>
+      <button className={`btn btn-small ${filled ? "" : "btn-primary"}`} onClick={onClick}>
+        {filled ? "Edytuj" : addLabel}
+      </button>
+    </div>
+  );
+}
+
+/** Skrót tekstu do kafelka. */
+export function clip(text: string, n = 140) {
+  const one = text.replace(/\s+/g, " ").trim();
+  return one.length > n ? one.slice(0, n - 1) + "…" : one;
+}
+
+/** Okno edycji jednego pola tekstowego. */
+export function TextModal({
+  title,
+  value,
+  hint,
+  mono,
+  rows = 12,
+  placeholder,
+  allowEmpty = true,
+  resetLabel,
+  onReset,
+  onSave,
+  onClose,
+}: {
+  title: string;
+  value: string;
+  hint?: ReactNode;
+  mono?: boolean;
+  rows?: number;
+  placeholder?: string;
+  allowEmpty?: boolean;
+  resetLabel?: string;
+  onReset?: () => void;
+  onSave: (v: string) => Promise<unknown> | void;
+  onClose: () => void;
+}) {
+  const [v, setV] = useState(value);
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal title={title} onClose={onClose} wide>
+      <form
+        className="stack"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (!allowEmpty && !v.trim()) return;
+          setBusy(true);
+          try {
+            await onSave(v);
+            onClose();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {hint && <div className="muted small">{hint}</div>}
+        <textarea autoFocus rows={rows} className={mono ? "mono" : ""} value={v} placeholder={placeholder} onChange={(e) => setV(e.target.value)} />
+        <div className="row-end">
+          {onReset && (
+            <button type="button" className="btn btn-ghost" onClick={() => {
+                setV("");
+                onReset();
+              }}>
+              {resetLabel ?? "Przywróć domyślne"}
+            </button>
+          )}
+          <div className="grow" />
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
+            Anuluj
+          </button>
+          <button type="submit" className="btn btn-primary" disabled={busy}>
+            Zapisz
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** Lista zasobów referencyjnych (tylko do odczytu); dodawanie przez okno. */
 export function ResourcesEditor({
   scope,
   scopeId,
   onError,
+  onChanged,
 }: {
   scope: Resource["scope"];
   scopeId: number | null;
   onError: (m: string) => void;
+  onChanged?: (count: number) => void;
 }) {
   const [items, setItems] = useState<Resource[]>([]);
-  const [name, setName] = useState("");
-  const [location, setLocation] = useState("");
-  const [note, setNote] = useState("");
+  const [adding, setAdding] = useState(false);
   const load = () =>
     api
       .get<Resource[]>(`/api/resources?scope=${scope}${scopeId != null ? `&scope_id=${scopeId}` : ""}`)
-      .then(setItems)
+      .then((r) => {
+        setItems(r);
+        onChanged?.(r.length);
+      })
       .catch((e) => onError(e.message));
   useEffect(() => {
     load();
@@ -116,37 +222,66 @@ export function ResourcesEditor({
             </div>
             {r.note && <div className="muted small">{r.note}</div>}
           </div>
-          <button
-            className="btn btn-ghost btn-small"
-            onClick={() => api.del(`/api/resources/${r.id}`).then(load).catch((e) => onError(e.message))}
-          >
+          <button className="btn btn-ghost btn-small" onClick={() => api.del(`/api/resources/${r.id}`).then(load).catch((e) => onError(e.message))}>
             Usuń
           </button>
         </div>
       ))}
+      <button className="btn btn-small align-start" onClick={() => setAdding(true)}>
+        + Dodaj zasób
+      </button>
+      {adding && <ResourceModal scope={scope} scopeId={scopeId} onClose={() => setAdding(false)} onSaved={load} onError={onError} />}
+    </div>
+  );
+}
+
+function ResourceModal({
+  scope,
+  scopeId,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  scope: Resource["scope"];
+  scopeId: number | null;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (m: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [location, setLocation] = useState("");
+  const [note, setNote] = useState("");
+  return (
+    <Modal title="Nowy zasób referencyjny (tylko do odczytu)" onClose={onClose}>
       <form
-        className="resource-add"
+        className="stack"
         onSubmit={(e) => {
           e.preventDefault();
           if (!location.trim()) return;
           api
             .post("/api/resources", { scope, scope_id: scopeId, name: name.trim(), location: location.trim(), note: note.trim() })
             .then(() => {
-              setName("");
-              setLocation("");
-              setNote("");
-              load();
+              onSaved();
+              onClose();
             })
-            .catch((e) => onError(e.message));
+            .catch((err) => onError(err.message));
         }}
       >
-        <input placeholder="Nazwa (np. Aplikacja wzorcowa)" value={name} onChange={(e) => setName(e.target.value)} />
-        <input placeholder="Ścieżka lokalna lub URL repo git" value={location} onChange={(e) => setLocation(e.target.value)} className="grow" />
-        <input placeholder="Notatka dla agenta (opcjonalnie)" value={note} onChange={(e) => setNote(e.target.value)} />
-        <button className="btn btn-small" type="submit">
-          Dodaj
-        </button>
+        <Field label="Ścieżka lokalna lub URL repozytorium git" hint="URL git zostanie sklonowany do ~/.vk/cache przy pierwszej sesji.">
+          <input autoFocus className="mono" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="~/projects/aplikacja-wzorcowa albo https://github.com/org/repo" />
+        </Field>
+        <Field label="Nazwa (opcjonalnie)">
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="np. Aplikacja wzorcowa" />
+        </Field>
+        <Field label="Notatka dla agenta (opcjonalnie)">
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="np. wzorzec architektury modułów" />
+        </Field>
+        <div className="row-end">
+          <button type="submit" className="btn btn-primary">
+            Dodaj
+          </button>
+        </div>
       </form>
-    </div>
+    </Modal>
   );
 }

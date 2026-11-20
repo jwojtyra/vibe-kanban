@@ -107,6 +107,17 @@ w Ustawienia → Uruchamianie → „Polecenie CLI”.
 7. **Akceptuj → Done** — merge `--no-ff` do gałęzi `vk/SHOP-412` w repo Kroku. Funkcja i Etap są
    „done”, gdy wszystkie ich Kroki są done. Push robisz sam w każdym repo.
 
+**Pytania i blokery.** Agent zadaje pytania (`vk_ask_question`) przy ticketcie albo elemencie planu,
+z propozycjami odpowiedzi — w UI wybierasz jedną (radio) albo wpisujesz własną (np. „omówmy na czacie”,
+„mam dodatkowe pytania”). Elementy z otwartymi pytaniami są **żółte**, z blokerem lub pytaniem
+blokującym — **czerwone**; ich Kroki (także podrzędne) nie ruszą w realizacji.
+
+**Wytyczne i prompty poziomów.** „Wytyczne” (górny pasek) to dokument z Twoimi wymaganiami
+technicznymi (jak pisać kod, czego nie robić) — trafia do każdej sesji; agent dopisuje do niego
+na prośbę. W Ustawieniach są ogólne prompty dla poziomów Etap / Funkcja / Krok.
+
+Formularze są ukryte — pola edytujesz przyciskiem „Dodaj” / „Edytuj”, który otwiera okno.
+
 Widoki ticketu: **Plan** (drzewo Etap → Funkcja → Krok ze statusami) i **Tablica kroków**
 (kanban Kroków z filtrem po repo i Funkcji).
 
@@ -165,8 +176,10 @@ CLI `vk` (opcjonalne, bez Dockera lub z `npm link`):
 
 ## Narzędzia MCP
 
-- Globalne: `vk_list_repos`, `vk_add_repo`, `vk_update_repo`, `vk_list_tasks`, `vk_create_task`.
-- Ticket: `vk_get_task`, `vk_attach_repo`, `vk_get_item`, `vk_create_stage`, `vk_create_feature`,
+- Globalne: `vk_list_repos`, `vk_add_repo`, `vk_update_repo`, `vk_list_tasks`, `vk_create_task`,
+  `vk_get_guidelines`, `vk_add_guideline`.
+- Ticket: `vk_get_task`, `vk_attach_repo`, `vk_get_item`, `vk_ask_question`, `vk_list_questions`,
+  `vk_close_question`, `vk_set_blocker`, `vk_create_stage`, `vk_create_feature`,
   `vk_create_step`, `vk_update_item`, `vk_delete_item`, `vk_reorder_items`, `vk_next_steps`,
   `vk_list_comments`, `vk_resolve_comment`, `vk_submit_for_review`.
 

@@ -30,7 +30,27 @@ export interface Task {
   plan_session_id: string;
   repos?: string[];
   steps?: { key: string; status: ItemStatus }[];
+  open_questions?: number;
+  blockers?: number;
 }
+
+export interface Question {
+  id: number;
+  task_id: number;
+  item_id: number | null;
+  item_key: string | null;
+  question: string;
+  options: string[];
+  blocking: boolean;
+  status: "open" | "answered" | "closed";
+  answer_choice: string | null;
+  answer_text: string;
+  note: string;
+  created_at: string;
+  answered_at: string | null;
+}
+
+export type Attention = "blocker" | "question" | null;
 
 export interface Item {
   id: number;
@@ -55,6 +75,10 @@ export interface Item {
   review_session_id: string | null;
   summary: string;
   error: string;
+  blocker: string;
+  attention: Attention;
+  open_questions: number;
+  block_reasons: string[];
   depends_on: string[];
   open_comments: number;
   commands: { open: string; agent: string | null; exec: string } | null;
@@ -85,6 +109,7 @@ export interface TaskView {
   task: Task;
   repos: Repo[];
   items: Item[];
+  questions: Question[];
   resources: Resource[];
   commands: { plan: string; run: string; plan_session_started: boolean };
   task_branch: string;

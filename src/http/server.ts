@@ -9,6 +9,14 @@ import { finishStep, nextStep, openSpec, planSpec, runSummary, sessionExists, st
 import { copyCommand, errorFragment, errorScript, execScript, interactiveScript, runScript, setPublicBase, stepFragment } from "./scripts.js";
 import {
   acceptPlan,
+  answerQuestion,
+  attention,
+  blockReasons,
+  closeQuestion,
+  deleteQuestion,
+  listQuestions,
+  reopenQuestion,
+  type Question,
   attachRepo,
   createComment,
   createItem,
@@ -58,11 +66,14 @@ const h = (fn: H) => async (req: Request, res: Response, next: NextFunction) => 
 };
 const id = (req: Request, name = "id") => Number(req.params[name]);
 
-function itemView(items: Item[], it: Item) {
+function itemView(items: Item[], it: Item, questions: Question[] = listQuestions(it.task_id)) {
   const isStep = it.level === LEVEL.STEP;
   return {
     ...it,
     display_status: derivedStatus(items, it),
+    attention: attention(it, questions),
+    open_questions: questions.filter((q) => q.item_id === it.id && q.status === "open").length,
+    block_reasons: isStep ? blockReasons(items, it, questions) : [],
     open_comments: isStep ? listComments(it.id, false).length : 0,
     commands: isStep
       ? {
@@ -77,10 +88,12 @@ function itemView(items: Item[], it: Item) {
 function taskView(tid: number) {
   const task = getTask(tid);
   const items = listItems(tid);
+  const questions = listQuestions(tid);
   return {
     task,
     repos: listTaskRepos(tid),
-    items: items.map((i) => itemView(items, i)),
+    items: items.map((i) => itemView(items, i, questions)),
+    questions,
     resources: listResources("task", tid),
     commands: { plan: copyCommand("plan", task.key), run: copyCommand("run", task.key), plan_session_started: sessionExists(task.plan_session_id) },
     task_branch: taskBranch(task),
@@ -147,8 +160,16 @@ export function createApp() {
     "/api/tasks",
     h(() =>
       listTasks().map((t) => {
-        const steps = listItems(t.id).filter((i) => i.level === LEVEL.STEP);
-        return { ...t, repos: listTaskRepos(t.id).map((r) => r.name), steps: steps.map((s) => ({ key: s.key, status: s.status })) };
+        const items = listItems(t.id);
+        const steps = items.filter((i) => i.level === LEVEL.STEP);
+        const qs = listQuestions(t.id, { status: "open" });
+        return {
+          ...t,
+          repos: listTaskRepos(t.id).map((r) => r.name),
+          steps: steps.map((s) => ({ key: s.key, status: s.status })),
+          open_questions: qs.length,
+          blockers: items.filter((i) => i.blocker.trim()).length + qs.filter((q) => q.blocking).length,
+        };
       }),
     ),
   );
@@ -211,6 +232,19 @@ export function createApp() {
   app.post("/api/items/:id/rebase", h((req) => (rebaseStep(stepOnly(id(req)).id), { ok: true })));
   app.get("/api/items/:id/diff", h((req) => stepDiff(stepOnly(id(req)))));
   app.get("/api/items/:id/log", h((req) => readLog(getItem(id(req)).log_path)));
+
+  // pytania agenta i blokery
+  app.post("/api/questions/:id/answer", h((req) => answerQuestion(id(req), req.body ?? {})));
+  app.post("/api/questions/:id/reopen", h((req) => reopenQuestion(id(req))));
+  app.post("/api/questions/:id/close", h((req) => closeQuestion(id(req), String(req.body?.note ?? ""))));
+  app.delete("/api/questions/:id", h((req) => deleteQuestion(id(req))));
+  app.post(
+    "/api/items/:id/blocker",
+    h((req) => {
+      const it = setItemFields(id(req), { blocker: String(req.body?.reason ?? "").trim() });
+      return itemView(listItems(it.task_id), it);
+    }),
+  );
 
   // komentarze
   app.get("/api/items/:id/comments", h((req) => listComments(id(req)).map(commentView)));

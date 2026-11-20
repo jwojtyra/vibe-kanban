@@ -54,6 +54,24 @@ planowania prowadzi do podejścia test-first:
 
 Komenda testów repo trafia do kontekstu agenta (`{{step.test_command}}`).
 
+### Pytania i blokery
+- Agent zadaje pytania (MCP `vk_ask_question`) przy ticketcie albo elemencie planu, z propozycjami
+  odpowiedzi; pytanie może być blokujące.
+- UI: radio z propozycjami + „Inna odpowiedź / uwagi” (jedno pole tekstowe — także na „omówmy na
+  czacie” / „mam dodatkowe pytania”; agent interpretuje tekst).
+- Element z otwartymi pytaniami — tło żółte; z blokerem (`vk_set_blocker` lub ręcznie w UI) albo
+  otwartym pytaniem blokującym — czerwone. Kroki zablokowane (własnym lub przodka blokiem, albo
+  blokującym pytaniem do ticketu) nie są uruchamiane.
+
+### Wytyczne i prompty poziomów
+- „Wytyczne” — dokument (markdown) z wymaganiami technicznymi użytkownika, w kontekście każdej sesji;
+  agent może dopisywać na prośbę (`vk_add_guideline`).
+- Prompty poziomów (Etap, Funkcja, Krok) — ogólne zasady definiowania każdego poziomu; w kontekście
+  planowania (wszystkie) i sesji Kroków (Funkcja, Krok).
+
+### UI
+Formularze są ukryte; pola edytuje się przyciskiem „Dodaj” / „Edytuj” otwierającym okno.
+
 ### Zasoby referencyjne (read-only)
 Lokalna ścieżka albo URL repozytorium git (klonowane do `~/.vk/cache`). Zakresy: globalne i ticket.
 Do sesji trafiają przez `--add-dir`, a zapis jest blokowany regułami `permissions.deny` + instrukcją w prompcie.

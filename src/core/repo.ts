@@ -66,10 +66,27 @@ export interface Item {
   review_session_id: string | null;
   summary: string;
   error: string;
+  blocker: string; // powód zablokowania (pusty = brak)
   log_path: string | null;
   created_at: string;
   updated_at: string;
   depends_on: string[]; // klucze elementów tego samego poziomu
+}
+
+export interface Question {
+  id: number;
+  task_id: number;
+  item_id: number | null;
+  item_key: string | null;
+  question: string;
+  options: string[];
+  blocking: boolean;
+  status: "open" | "answered" | "closed";
+  answer_choice: string | null;
+  answer_text: string;
+  note: string;
+  created_at: string;
+  answered_at: string | null;
 }
 
 export interface Resource {
@@ -117,6 +134,11 @@ export function updateSettings(values: Record<string, string>) {
   tx(() => {
     for (const [k, v] of Object.entries(values)) {
       if (!(k in DEFAULT_SETTINGS)) continue;
+      // pusta wartość pola z niepustym domyślnym = powrót do wartości domyślnej
+      if (String(v) === "" && DEFAULT_SETTINGS[k] !== "") {
+        run("DELETE FROM settings WHERE key = ?", k);
+        continue;
+      }
       run("INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", k, String(v));
     }
   });
@@ -611,16 +633,117 @@ export function acceptPlan(taskId: number, rootRef?: string) {
   });
 }
 
-/** Kroki gotowe do realizacji: Todo, przodkowie zaakceptowani, efektywne zależności w Review/Done. */
+/**
+ * Powody, dla których element (lub jego przodkowie) jest zablokowany:
+ * ręcznie wpisany bloker albo otwarte pytanie blokujące.
+ */
+export function blockReasons(items: Item[], item: Item, questions: Question[]): string[] {
+  const out: string[] = [];
+  for (const el of [item, ...ancestors(items, item)]) {
+    if (el.blocker.trim()) out.push(`${el.key}: ${el.blocker.trim()}`);
+    for (const q of questions) if (q.item_id === el.id && q.blocking && q.status === "open") out.push(`${el.key}: pytanie #${q.id} — ${q.question}`);
+  }
+  for (const q of questions) if (q.item_id === null && q.blocking && q.status === "open") out.push(`ticket: pytanie #${q.id} — ${q.question}`);
+  return out;
+}
+
+/** Stan uwagi elementu (tylko jego własny): bloker > otwarte pytania > brak. */
+export function attention(item: Item, questions: Question[]): "blocker" | "question" | null {
+  const own = questions.filter((q) => q.item_id === item.id && q.status === "open");
+  if (item.blocker.trim() || own.some((q) => q.blocking)) return "blocker";
+  if (own.length) return "question";
+  return null;
+}
+
+/** Kroki gotowe do realizacji: Todo, przodkowie zaakceptowani, brak blokerów, efektywne zależności w Review/Done. */
 export function runnableSteps(taskId: number): Item[] {
   const items = listItems(taskId);
+  const questions = listQuestions(taskId);
   return items.filter(
     (s) =>
       s.level === LEVEL.STEP &&
       s.status === "todo" &&
       ancestors(items, s).every((a) => a.status !== "draft") &&
+      blockReasons(items, s, questions).length === 0 &&
       effectiveDeps(items, s).every((d) => d.status === "review" || d.status === "done"),
   );
+}
+
+// ---------- pytania ----------
+
+type QuestionRow = Omit<Question, "options" | "blocking" | "item_key"> & { options: string; blocking: number; item_key: string | null };
+
+function toQuestion(r: QuestionRow): Question {
+  let options: string[] = [];
+  try {
+    options = JSON.parse(r.options);
+  } catch {
+    options = [];
+  }
+  return { ...r, options, blocking: !!r.blocking };
+}
+
+const Q_SELECT = "SELECT q.*, i.key AS item_key FROM questions q LEFT JOIN items i ON i.id = q.item_id";
+
+export function listQuestions(taskId: number, opts: { itemId?: number | null; status?: Question["status"] } = {}): Question[] {
+  const conds = ["q.task_id = ?"];
+  const params: (string | number)[] = [taskId];
+  if (opts.itemId !== undefined) {
+    if (opts.itemId === null) conds.push("q.item_id IS NULL");
+    else {
+      conds.push("q.item_id = ?");
+      params.push(opts.itemId);
+    }
+  }
+  if (opts.status) {
+    conds.push("q.status = ?");
+    params.push(opts.status);
+  }
+  return all<QuestionRow>(`${Q_SELECT} WHERE ${conds.join(" AND ")} ORDER BY q.status = 'open' DESC, q.id`, ...params).map(toQuestion);
+}
+
+export function getQuestion(id: number): Question {
+  const r = get<QuestionRow>(`${Q_SELECT} WHERE q.id = ?`, id);
+  if (!r) throw new VkError(`Brak pytania #${id}`, 404);
+  return toQuestion(r);
+}
+
+export function createQuestion(taskId: number, data: { item_id?: number | null; question: string; options?: string[]; blocking?: boolean }): Question {
+  if (!data.question?.trim()) throw new VkError("Puste pytanie");
+  const options = (data.options ?? []).map((o) => String(o).trim()).filter(Boolean);
+  const r = run(
+    "INSERT INTO questions(task_id, item_id, question, options, blocking) VALUES(?, ?, ?, ?, ?)",
+    taskId,
+    data.item_id ?? null,
+    data.question.trim(),
+    JSON.stringify(options),
+    data.blocking ? 1 : 0,
+  );
+  return getQuestion(Number(r.lastInsertRowid));
+}
+
+/** Odpowiedź człowieka: wybrana propozycja i/lub własny tekst (np. "omówmy na czacie", "mam pytania"). */
+export function answerQuestion(id: number, data: { choice?: string | null; text?: string }): Question {
+  const q = getQuestion(id);
+  const choice = data.choice && q.options.includes(data.choice) ? data.choice : null;
+  const text = (data.text ?? "").trim();
+  if (!choice && !text) throw new VkError("Wybierz odpowiedź albo wpisz własną");
+  run("UPDATE questions SET status = 'answered', answer_choice = ?, answer_text = ?, answered_at = datetime('now') WHERE id = ?", choice, text, id);
+  return getQuestion(id);
+}
+
+export function reopenQuestion(id: number): Question {
+  run("UPDATE questions SET status = 'open', answer_choice = NULL, answer_text = '', answered_at = NULL WHERE id = ?", id);
+  return getQuestion(id);
+}
+
+export function closeQuestion(id: number, note = ""): Question {
+  run("UPDATE questions SET status = 'closed', note = ? WHERE id = ?", note, id);
+  return getQuestion(id);
+}
+
+export function deleteQuestion(id: number) {
+  run("DELETE FROM questions WHERE id = ?", id);
 }
 
 // ---------- resources ----------

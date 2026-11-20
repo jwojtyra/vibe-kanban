@@ -1,12 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { commentView, itemContext, itemSummary, taskContext } from "../core/context.js";
+import { commentView, guidelinesText, itemContext, itemSummary, questionView, taskContext } from "../core/context.js";
 import { commitAll } from "../core/git.js";
 import { addRepo } from "../core/repos.js";
 import { copyCommand } from "../http/scripts.js";
 import {
   attachRepo,
+  closeQuestion,
+  createQuestion,
+  getQuestion,
+  listQuestions,
+  updateSettings,
   createItem,
   createTask,
   deleteItem,
@@ -97,6 +102,42 @@ function registerGlobalTools(server: McpServer) {
       inputSchema: { repo: z.string().describe("Nazwa repo"), base_branch: z.string().optional(), test_command: z.string().optional(), description: z.string().optional() },
     },
     wrap((a: { repo: string; base_branch?: string; test_command?: string; description?: string }) => updateRepo(findRepo(a.repo).id, a)),
+  );
+
+  server.registerTool(
+    "vk_get_guidelines",
+    { description: "Dokument „Wytyczne” — wymagania techniczne użytkownika (jak pisać kod, co robić, czego nie robić). Obowiązują w każdej pracy.", inputSchema: {} },
+    wrap(() => guidelinesText() || "(brak wytycznych)"),
+  );
+
+  server.registerTool(
+    "vk_add_guideline",
+    {
+      description:
+        "Dopisuje wymaganie do dokumentu „Wytyczne”. Używaj TYLKO, gdy użytkownik wprost prosi o zapisanie zasady (np. „zapisz w wytycznych, że…”).",
+      inputSchema: {
+        text: z.string().describe("Treść zasady (zwięźle, w trybie rozkazującym)"),
+        section: z.string().optional().describe("Nagłówek sekcji, np. Testy, Klasy, API (opcjonalnie)"),
+      },
+    },
+    wrap(({ text, section }: { text: string; section?: string }) => {
+      let doc = guidelinesText();
+      const line = `- ${text.trim()}`;
+      if (section?.trim()) {
+        const h = `## ${section.trim()}`;
+        const idx = doc.split("\n").findIndex((l) => l.trim().toLowerCase() === h.toLowerCase());
+        if (idx >= 0) {
+          const lines = doc.split("\n");
+          let end = idx + 1;
+          while (end < lines.length && !lines[end].startsWith("## ")) end++;
+          while (end > idx + 1 && !lines[end - 1].trim()) end--;
+          lines.splice(end, 0, line);
+          doc = lines.join("\n");
+        } else doc = `${doc}${doc ? "\n\n" : ""}${h}\n${line}`;
+      } else doc = `${doc}${doc ? "\n" : ""}${line}`;
+      updateSettings({ guidelines: doc });
+      return "Dopisano do wytycznych.";
+    }),
   );
 
   server.registerTool(
@@ -266,6 +307,59 @@ function registerTaskTools(server: McpServer, taskId: number, itemKey?: string) 
     "vk_next_steps",
     { description: "Kroki gotowe do realizacji (Todo, zależności — także Funkcji i Etapów — w Review/Done).", inputSchema: {} },
     wrap(() => runnableSteps(taskId).map(summary)),
+  );
+
+  server.registerTool(
+    "vk_ask_question",
+    {
+      description:
+        "Zadaje człowiekowi pytanie (pokazywane w UI przy elemencie planu — żółte tło; blokujące — czerwone). Podaj 2–4 propozycje odpowiedzi; człowiek wybierze jedną albo wpisze własną (np. że chce omówić temat na czacie lub ma dodatkowe pytania). Bez klucza — pytanie do całego ticketu.",
+      inputSchema: {
+        key: z.string().optional().describe("Element planu (Etap/Funkcja/Krok); pomiń dla pytania o cały ticket"),
+        question: z.string(),
+        options: z.array(z.string()).describe("Proponowane odpowiedzi"),
+        blocking: z.boolean().optional().describe("true = bez odpowiedzi elementu nie da się zrealizować (Kroki nie ruszą)"),
+      },
+    },
+    wrap((a: { key?: string; question: string; options: string[]; blocking?: boolean }) => {
+      const it = a.key ? current(a.key) : itemKey ? current() : null;
+      return questionView(createQuestion(taskId, { item_id: it?.id ?? null, question: a.question, options: a.options, blocking: a.blocking }));
+    }),
+  );
+
+  server.registerTool(
+    "vk_list_questions",
+    {
+      description: "Pytania do człowieka z odpowiedziami. status: open | answered | closed (domyślnie open i answered). Bez klucza — wszystkie w tickecie.",
+      inputSchema: { key: z.string().optional(), status: z.enum(["open", "answered", "closed"]).optional() },
+    },
+    wrap(({ key, status }: { key?: string; status?: "open" | "answered" | "closed" }) =>
+      listQuestions(taskId, { itemId: key ? current(key).id : undefined, status })
+        .filter((q) => status || q.status !== "closed")
+        .map(questionView),
+    ),
+  );
+
+  server.registerTool(
+    "vk_close_question",
+    { description: "Zamyka obsłużone pytanie (np. po uwzględnieniu odpowiedzi w planie), z krótką notatką.", inputSchema: { id: z.number().int(), note: z.string().optional() } },
+    wrap(({ id, note }: { id: number; note?: string }) => {
+      if (getQuestion(id).task_id !== taskId) throw new VkError("Pytanie z innego ticketu");
+      return questionView(closeQuestion(id, note ?? ""));
+    }),
+  );
+
+  server.registerTool(
+    "vk_set_blocker",
+    {
+      description: "Oznacza element planu jako zablokowany (czerwony w UI; jego Kroki nie ruszą) z podaniem powodu. Pusty reason usuwa bloker.",
+      inputSchema: { key: z.string().optional(), reason: z.string() },
+    },
+    wrap(({ key, reason }: { key?: string; reason: string }) => {
+      const it = current(key);
+      setItemFields(it.id, { blocker: reason.trim() });
+      return reason.trim() ? `${it.key} zablokowany: ${reason.trim()}` : `${it.key} odblokowany`;
+    }),
   );
 
   server.registerTool(
