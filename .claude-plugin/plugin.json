@@ -1,6 +1,6 @@
 {
   "name": "vibe-kanban",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Lokalny kanban dla Claude Code: tickety z wieloma repozytoriami, plan Etap → Funkcja → Krok (test-first), realizacja w git worktree i review. Serwer działa w Dockerze.",
   "author": { "name": "jwojtyra" },
   "repository": "https://github.com/jwojtyra/vibe-kanban",
