@@ -111,6 +111,20 @@ CREATE TABLE IF NOT EXISTS resources (
   note TEXT NOT NULL DEFAULT ''
 );
 
+-- załączniki ticketu; pliki w ~/.vk/attachments/<KLUCZ>/
+CREATE TABLE IF NOT EXISTS attachments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+  note TEXT NOT NULL DEFAULT '',
+  extracted TEXT,                 -- katalog z rozpakowanym ZIP-em (względny)
+  extract_info TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (task_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS comments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,

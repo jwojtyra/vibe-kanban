@@ -8,14 +8,16 @@
  * {{step.acceptance}}, {{step.repo}}, {{step.test_command}}, {{feature.key}}, {{feature.title}},
  * {{feature.description}}, {{feature.problem}}, {{feature.acceptance}}, {{stage.key}},
  * {{stage.title}}, {{comments}}, {{guidelines}}, {{levels}}, {{level.stage}}, {{level.feature}},
- * {{level.step}}, {{questions}}
+ * {{level.step}}, {{questions}}, {{attachments}}
  */
 
 export const DEFAULT_PLAN_PROMPT = `Zadanie {{task.key}}: {{task.title}}
 
 Przeanalizuj zadanie i rozbij je na plan w trzech poziomach.
 
-1. Kontekst: vk_get_task (opis, ticket, linki, założenia, repozytoria, zasoby referencyjne).
+1. Kontekst: vk_get_task (opis, ticket, linki, założenia, repozytoria, zasoby referencyjne, załączniki).
+   Przejrzyj załączniki ticketu (obrazy otwórz narzędziem Read, rozpakowane ZIP-y przeczytaj) —
+   mogą zmieniać zakres albo sposób realizacji.
    Jeśli podano ticket i masz narzędzia Jira/Atlassian — pobierz jego treść.
 2. Przeanalizuj kod repozytoriów ticketu i zasoby referencyjne (tylko do odczytu).
 3. Gdy coś jest niejasne albo wymaga mojej decyzji — nie zgaduj. Dodaj pytanie narzędziem

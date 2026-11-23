@@ -107,6 +107,13 @@ w Ustawienia → Uruchamianie → „Polecenie CLI”.
 7. **Akceptuj → Done** — merge `--no-ff` do gałęzi `vk/SHOP-412` w repo Kroku. Funkcja i Etap są
    „done”, gdy wszystkie ich Kroki są done. Push robisz sam w każdym repo.
 
+**Załączniki.** W „Szczegółach ticketu” → „Załączniki” dodasz pliki, które wpływają na to, czy i jak
+realizować zadanie: ZIP ze specyfikacją, zrzuty ekranu, makiety, PDF, dane przykładowe. Przeciągnij je,
+wybierz z dysku albo wklej zrzut ekranu (Ctrl+V); do każdego możesz dopisać opis dla agenta. ZIP jest
+od razu rozpakowywany (z ochroną przed `../` i zip-bombami). Pliki trafiają do każdej sesji ticketu
+(planowanie, Kroki, review) jako katalog tylko do odczytu — agent czyta je narzędziem Read (także obrazy),
+a listę dostaje w system prompcie i przez `vk_list_attachments`.
+
 **Pytania i blokery.** Agent zadaje pytania (`vk_ask_question`) przy ticketcie albo elemencie planu,
 z propozycjami odpowiedzi — w UI wybierasz jedną (radio) albo wpisujesz własną (np. „omówmy na czacie”,
 „mam dodatkowe pytania”). Elementy z otwartymi pytaniami są **żółte**, z blokerem lub pytaniem
@@ -178,7 +185,7 @@ CLI `vk` (opcjonalne, bez Dockera lub z `npm link`):
 
 - Globalne: `vk_list_repos`, `vk_add_repo`, `vk_update_repo`, `vk_list_tasks`, `vk_create_task`,
   `vk_get_guidelines`, `vk_add_guideline`.
-- Ticket: `vk_get_task`, `vk_attach_repo`, `vk_get_item`, `vk_ask_question`, `vk_list_questions`,
+- Ticket: `vk_get_task`, `vk_list_attachments`, `vk_attach_repo`, `vk_get_item`, `vk_ask_question`, `vk_list_questions`,
   `vk_close_question`, `vk_set_blocker`, `vk_create_stage`, `vk_create_feature`,
   `vk_create_step`, `vk_update_item`, `vk_delete_item`, `vk_reorder_items`, `vk_next_steps`,
   `vk_list_comments`, `vk_resolve_comment`, `vk_submit_for_review`.
@@ -188,6 +195,8 @@ CLI `vk` (opcjonalne, bez Dockera lub z `npm link`):
 - Baza: `~/.vk/vk.db` (zmienna `VK_HOME` zmienia katalog), logi subagentów: `~/.vk/logs`.
   Baza w starszym formacie jest przy starcie odkładana jako `vk.db.v*.bak` i tworzona od nowa.
 - Worktree: `~/.vk/worktrees/<repo>/<KLUCZ>`; zasoby git klonowane do `~/.vk/cache`.
+- Załączniki: `~/.vk/attachments/<KLUCZ>/` (ZIP rozpakowany obok: `spec.zip` → `spec/`); limit 200 MB na plik.
+  API: `curl -X POST 'localhost:4777/api/tasks/<ID>/attachments?name=spec.zip&note=…' -H 'Content-Type: application/octet-stream' --data-binary @spec.zip`.
 - Sesja planowania działa w stałym katalogu `~/.vk/plan/<KLUCZ>` z repozytoriami dodanymi przez
   `--add-dir` (z ich `CLAUDE.md`), więc da się ją zawsze wznowić, nawet po dodaniu repo.
 

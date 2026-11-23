@@ -94,6 +94,22 @@ export interface Resource {
   note: string;
 }
 
+export interface Attachment {
+  id: number;
+  task_id: number;
+  name: string;
+  size: number;
+  mime: string;
+  note: string;
+  extracted: string | null;
+  extract_info: string;
+  created_at: string;
+  kind: "image" | "archive" | "file";
+  local_path: string;
+  extracted_path: string | null;
+  files?: string[];
+}
+
 export interface Comment {
   id: number;
   file: string | null;
@@ -111,6 +127,7 @@ export interface TaskView {
   items: Item[];
   questions: Question[];
   resources: Resource[];
+  attachments: Attachment[];
   commands: { plan: string; run: string; plan_session_started: boolean };
   task_branch: string;
   task_repos: { name: string; worktree: string }[];

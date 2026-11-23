@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { commentView, guidelinesText, itemContext, itemSummary, questionView, taskContext } from "../core/context.js";
+import { attachmentsContext, commentView, guidelinesText, itemContext, itemSummary, questionView, taskContext } from "../core/context.js";
 import { commitAll } from "../core/git.js";
 import { addRepo } from "../core/repos.js";
 import { copyCommand } from "../http/scripts.js";
@@ -185,10 +185,20 @@ function registerTaskTools(server: McpServer, taskId: number, itemKey?: string) 
     "vk_get_task",
     {
       description:
-        "Pełny kontekst ticketu: opis, link, linki, założenia, repozytoria (ścieżki, komendy testów), zasoby referencyjne (tylko do odczytu) i plan jako drzewo Etap → Funkcja → Krok ze statusami.",
+        "Pełny kontekst ticketu: opis, link, linki, założenia, repozytoria (ścieżki, komendy testów), zasoby referencyjne i załączniki (tylko do odczytu) oraz plan jako drzewo Etap → Funkcja → Krok ze statusami.",
       inputSchema: {},
     },
     wrap(() => taskContext(getTask(taskId))),
+  );
+
+  server.registerTool(
+    "vk_list_attachments",
+    {
+      description:
+        "Załączniki ticketu dodane przez człowieka (np. ZIP ze specyfikacją, zrzuty ekranu, makiety, PDF): ścieżki lokalne, opisy, zawartość rozpakowanych ZIP-ów. Tylko do odczytu — czytaj je narzędziem Read (obrazy też).",
+      inputSchema: {},
+    },
+    wrap(() => attachmentsContext(getTask(taskId))),
   );
 
   server.registerTool(

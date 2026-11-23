@@ -76,6 +76,12 @@ Formularze są ukryte; pola edytuje się przyciskiem „Dodaj” / „Edytuj” 
 Lokalna ścieżka albo URL repozytorium git (klonowane do `~/.vk/cache`). Zakresy: globalne i ticket.
 Do sesji trafiają przez `--add-dir`, a zapis jest blokowany regułami `permissions.deny` + instrukcją w prompcie.
 
+### Załączniki ticketu (read-only)
+Pliki dodane w UI (drag&drop, wybór z dysku, wklejenie zrzutu ekranu) albo przez API, z opcjonalnym opisem.
+Leżą w `~/.vk/attachments/<KLUCZ>/`; ZIP jest rozpakowywany do katalogu obok. Katalog trafia do sesji
+przez `--add-dir` z regułami `permissions.deny`, lista — do system promptu (`{{attachments}}`) i MCP
+(`vk_list_attachments`, `vk_get_task`). Usunięcie ticketu usuwa jego załączniki.
+
 ### Prompty
 Trzy szablony z placeholderami `{{...}}`: planowanie, implementacja Kroku, review Kroku.
 Domyślne są globalne (Ustawienia), ticket może je nadpisać.

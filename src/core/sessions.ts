@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { existingAttachmentsDir } from "./attachments.js";
 import { gitCacheDir, mcpConfig, promptTemplate, readonlySettings, renderPrompt, resolveResources, sessionSystemPrompt } from "./context.js";
 import { commitAll, ensureGitResource, ensureTaskWorktree, hasChanges, prepareStepWorktree, stepRepo } from "./git.js";
 import { cliPath, subdir } from "./paths.js";
@@ -77,8 +78,11 @@ function commonArgs(kind: "plan" | "impl" | "review", task: Task, step?: Item) {
   const repoDirs = listTaskRepos(task.id)
     .filter((r) => r.id !== step?.repo_id)
     .map((r) => r.path);
-  const readonly = kind === "plan" ? resDirs : [...resDirs, ...repoDirs];
-  const dirs = [...resDirs, ...repoDirs];
+  // załączniki ticketu: zawsze tylko do odczytu
+  const att = existingAttachmentsDir(task);
+  const attDirs = att ? [att] : [];
+  const readonly = kind === "plan" ? [...resDirs, ...attDirs] : [...resDirs, ...attDirs, ...repoDirs];
+  const dirs = [...resDirs, ...attDirs, ...repoDirs];
   return {
     res,
     clones: pendingClones(task),

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { attachmentsText, listAttachmentViews } from "./attachments.js";
 import { ensureGitResource, taskBranch, taskWorktreePath } from "./git.js";
 import { slug, subdir } from "./paths.js";
 import {
@@ -150,6 +151,20 @@ export function planTree(task: Task): TreeNode[] {
   return childrenOf(items, null).map(node);
 }
 
+/** Załączniki ticketu dla MCP: ścieżki lokalne, opis, zawartość rozpakowanych ZIP-ów. */
+export function attachmentsContext(task: Task) {
+  return listAttachmentViews(task.id).map((a) => ({
+    name: a.name,
+    path: a.local_path,
+    kind: a.kind,
+    size: a.size,
+    note: a.note || undefined,
+    extracted_to: a.extracted_path ?? undefined,
+    extract_info: a.extract_info || undefined,
+    files: a.files,
+  }));
+}
+
 export function taskContext(task: Task) {
   return {
     key: task.key,
@@ -162,6 +177,7 @@ export function taskContext(task: Task) {
     repositories: reposContext(task),
     task_branch: taskBranch(task),
     resources_readonly: resolveResources(task, false),
+    attachments_readonly: attachmentsContext(task),
     status: task.status,
     questions: listQuestions(task.id).filter((q) => q.status !== "closed").map(questionView),
     plan: planTree(task),
@@ -268,6 +284,7 @@ export function renderPrompt(tpl: string, task: Task, step?: Item, res?: Resolve
     questions: questionsText(listQuestions(task.id).filter((q) => q.status !== "closed")),
     repos: reposText(task),
     resources: resourcesText(res ?? resolveResources(task, false)),
+    attachments: attachmentsText(task),
   };
   if (step) {
     const items = listItems(task.id);
@@ -332,6 +349,9 @@ export function sessionSystemPrompt(kind: PromptKind, task: Task, res: ResolvedR
     "## Zasoby referencyjne — TYLKO DO ODCZYTU",
     "Możesz je czytać i wzorować się na nich. Nigdy ich nie modyfikuj.",
     resourcesText(res),
+    "## Załączniki ticketu — TYLKO DO ODCZYTU",
+    "Pliki dodane przez człowieka do ticketu (specyfikacje, zrzuty ekranu, makiety, dane przykładowe). Przejrzyj je, zanim zdecydujesz, czy i jak realizować zadanie — mogą zawierać wymagania. Obrazy oglądaj narzędziem Read. Nigdy ich nie modyfikuj.",
+    attachmentsText(task),
     "## Zasady",
     "- Wszystko dzieje się lokalnie: nie wykonuj `git push`, nie twórz pull requestów, nie publikuj niczego.",
   ]

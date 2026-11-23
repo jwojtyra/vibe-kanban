@@ -1,6 +1,16 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  addAttachment,
+  attachmentFilePath,
+  deleteAttachment,
+  getAttachment,
+  listAttachmentViews,
+  MAX_ATTACHMENT_BYTES,
+  removeTaskAttachments,
+  updateAttachment,
+} from "../core/attachments.js";
 import { commentView, itemContext } from "../core/context.js";
 import { mergeStep, rebaseStep, removeStepWorktree, stepDiff, taskBranch, taskRepos, taskWorktreePath } from "../core/git.js";
 import { uiDistPath } from "../core/paths.js";
@@ -95,6 +105,7 @@ function taskView(tid: number) {
     items: items.map((i) => itemView(items, i, questions)),
     questions,
     resources: listResources("task", tid),
+    attachments: listAttachmentViews(tid),
     commands: { plan: copyCommand("plan", task.key), run: copyCommand("run", task.key), plan_session_started: sessionExists(task.plan_session_id) },
     task_branch: taskBranch(task),
     task_repos: taskRepos(task).map((r) => ({ name: r.name, worktree: taskWorktreePath(task, r) })),
@@ -177,7 +188,14 @@ export function createApp() {
   app.post("/api/tasks", h((req) => taskView(createTask(req.body ?? {}).id)));
   app.get("/api/tasks/:id", h((req) => taskView(id(req))));
   app.put("/api/tasks/:id", h((req) => (updateTask(id(req), req.body), taskView(id(req)))));
-  app.delete("/api/tasks/:id", h((req) => deleteTask(id(req))));
+  app.delete(
+    "/api/tasks/:id",
+    h((req) => {
+      const task = getTask(id(req));
+      deleteTask(task.id);
+      removeTaskAttachments(task);
+    }),
+  );
   app.post("/api/tasks/:id/repos", h((req) => (attachRepo(id(req), req.body.repo), taskView(id(req)))));
   app.delete("/api/tasks/:id/repos/:repoId", h((req) => (detachRepo(id(req), id(req, "repoId")), taskView(id(req)))));
   app.post("/api/tasks/:id/accept-plan", h((req) => (acceptPlan(id(req), req.body?.root), taskView(id(req)))));
@@ -251,6 +269,36 @@ export function createApp() {
   app.post("/api/items/:id/comments", h((req) => commentView(createComment(id(req), req.body))));
   app.put("/api/comments/:id", h((req) => commentView(updateComment(id(req), req.body))));
   app.delete("/api/comments/:id", h((req) => deleteComment(id(req))));
+
+  // załączniki ticketu: surowe body (application/octet-stream), nazwa i opis w query.
+  // Tylko application/octet-stream — inne typy wymagają preflightu CORS, więc obca strona nie wyśle pliku.
+  app.post(
+    "/api/tasks/:id/attachments",
+    express.raw({ type: "application/octet-stream", limit: MAX_ATTACHMENT_BYTES }),
+    h((req) => {
+      if (!Buffer.isBuffer(req.body)) throw new VkError("Wyślij plik jako application/octet-stream (?name=nazwa.pliku)");
+      return addAttachment(id(req), String(req.query.name ?? "plik"), req.body, String(req.query.note ?? ""));
+    }),
+  );
+  app.get("/api/tasks/:id/attachments", h((req) => listAttachmentViews(id(req))));
+  app.put("/api/attachments/:id", h((req) => updateAttachment(id(req), req.body ?? {})));
+  app.delete("/api/attachments/:id", h((req) => deleteAttachment(id(req))));
+  app.get("/api/attachments/:id/file", (req, res, next) => {
+    try {
+      const a = getAttachment(id(req));
+      const file = attachmentFilePath(a);
+      if (!fs.existsSync(file)) throw new VkError("Plik załącznika nie istnieje na dysku", 404);
+      // obrazy rastrowe inline (miniatury), reszta — do pobrania (np. SVG/HTML nie wykonuje się w origin UI)
+      const inline = /^image\/(png|jpeg|gif|webp)$/.test(a.mime) && req.query.download !== "1";
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+      res.type(inline ? a.mime : "application/octet-stream");
+      res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(a.name)}`);
+      res.sendFile(file);
+    } catch (e) {
+      next(e);
+    }
+  });
 
   // zasoby referencyjne
   app.get("/api/resources", h((req) => listResources(String(req.query.scope ?? "global") === "task" ? "task" : "global", req.query.scope_id ? Number(req.query.scope_id) : null)));

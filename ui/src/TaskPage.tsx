@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, COLUMNS, LEVEL_NAME, shortKey, STATUS_LABEL, type Item, type Link, type Repo, type Task, type TaskView } from "./api";
 import { clip, CopyCmd, EditTile, Field, Modal, ResourcesEditor, TextModal } from "./common";
+import { AttachmentsEditor } from "./Attachments";
 import { ItemPanel } from "./ItemPanel";
 import { QuestionsModal } from "./Questions";
 import { RepoPicker } from "./Repos";
@@ -450,6 +451,12 @@ export function TaskPage({
               summary={`${resCount} zasob(y/ów); dodatkowo zasoby globalne`}
               onClick={() => setEdit("resources")}
             />
+            <EditTile
+              label="Załączniki (pliki, ZIP, zrzuty ekranu)"
+              filled={view.attachments.length > 0}
+              summary={view.attachments.map((a) => a.name).join(" · ")}
+              onClick={() => setEdit("attachments")}
+            />
             {ticketPrompts.map(([k, label]) => (
               <EditTile
                 key={k}
@@ -590,6 +597,15 @@ export function TaskPage({
         <Modal title="Zasoby referencyjne ticketu" onClose={() => setEdit(null)} wide>
           <p className="muted small">Tylko do odczytu. Do sesji trafiają też zasoby globalne (Ustawienia).</p>
           <ResourcesEditor scope="task" scopeId={task.id} onError={onError} onChanged={setResCount} />
+        </Modal>
+      )}
+      {edit === "attachments" && (
+        <Modal title={`Załączniki ticketu ${task.key}`} onClose={() => setEdit(null)} wide>
+          <p className="muted small">
+            Pliki, które mają wpływ na to, czy i jak realizować zadanie: specyfikacje, makiety, zrzuty ekranu, dane przykładowe. Trafiają do każdej
+            sesji Claude tego ticketu (planowanie, Kroki, review) jako pliki tylko do odczytu.
+          </p>
+          <AttachmentsEditor taskId={task.id} attachments={view.attachments} onChanged={load} onError={onError} />
         </Modal>
       )}
       {ticketPrompts.map(([k, label]) =>
